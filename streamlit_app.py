@@ -1,5 +1,4 @@
-# streamlit_app.py - Laboratory Reagent Inventory System
-# Optimized QR labels for ~5mm x 5mm physical size
+# streamlit_app.py - Laboratory Reagent Inventory System (Final Version)
 
 import streamlit as st
 import pandas as pd
@@ -8,7 +7,7 @@ import qrcode
 from io import BytesIO
 import hashlib
 
-# SQLite compatibility fix for Streamlit Cloud
+# SQLite compatibility for Streamlit Cloud
 try:
     import pysqlite3 as sqlite3
 except ImportError:
@@ -49,7 +48,7 @@ def init_db():
                  timestamp TEXT,
                  notes TEXT)''')
     
-    # Default users - CHANGE THESE PASSWORDS IN PRODUCTION!
+    # Default users - CHANGE PASSWORDS IMMEDIATELY!
     hashed_admin = hashlib.sha256("admin123".encode()).hexdigest()
     hashed_user = hashlib.sha256("user123".encode()).hexdigest()
     c.execute("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
@@ -118,7 +117,7 @@ reagents_df = load_reagents()
 alerts = []
 today = date.today()
 for _, row in reagents_df.iterrows():
-    if row['quantity'] <= row['low_stock_threshold']:
+    if row['quantity'] <= row['low_stock_threshold]:
         alerts.append(f"⚠️ **Low Stock**: {row['name']} — {row['quantity']:.2f} {row['unit']}")
     if pd.notnull(row['expiration_date']) and row['expiration_date'] < today:
         alerts.append(f"❌ **Expired**: {row['name']} ({row['expiration_date']})")
@@ -126,14 +125,14 @@ for _, row in reagents_df.iterrows():
 if alerts:
     st.warning("\n\n".join(alerts))
 
-# Auto-load from URL parameter
+# Auto-load reagent from URL
 query_params = st.query_params
 if "reagent_id" in query_params:
     try:
         auto_id = int(query_params["reagent_id"][0])
         if auto_id in reagents_df['id'].values:
             auto_row = reagents_df[reagents_df['id'] == auto_id].iloc[0]
-            st.success(f"🔍 Auto-loaded Reagent: {auto_row['name']} (ID: {auto_id})")
+            st.success(f"🔍 Auto-loaded: {auto_row['name']} (ID: {auto_id})")
             st.dataframe(auto_row.to_frame().T, use_container_width=True)
     except:
         pass
@@ -155,7 +154,12 @@ with tab1:
 
 with tab2:
     st.header("Add New Reagent")
-    with st.form("add_form"):
+    
+    # Dynamic form key to reset all fields after successful add
+    if "add_form_key" not in st.session_state:
+        st.session_state.add_form_key = 0
+    
+    with st.form(key=f"add_form_{st.session_state.add_form_key}"):
         col1, col2 = st.columns(2)
         name = col1.text_input("Name*", help="Required")
         cas = col1.text_input("CAS Number")
@@ -166,7 +170,8 @@ with tab2:
         exp_date = col2.date_input("Expiration Date", value=None)
         threshold = col2.number_input("Low Stock Threshold", value=10.0, min_value=0.0)
 
-        if st.form_submit_button("Add Reagent"):
+        submitted = st.form_submit_button("Add Reagent")
+        if submitted:
             if not name.strip() or not location.strip():
                 st.error("Name and Location are required!")
             else:
@@ -179,7 +184,12 @@ with tab2:
                            str(exp_date) if exp_date else None, threshold))
                 conn.commit()
                 conn.close()
+                
                 st.success(f"Added '{name}' successfully!")
+                
+                # Reset form by changing key
+                st.session_state.add_form_key += 1
+                
                 st.cache_data.clear()
                 st.rerun()
 
@@ -236,17 +246,16 @@ with tab4:
             app_url = st.text_input(
                 "Your App URL (for QR links)",
                 value="https://your-app-name.streamlit.app",
-                help="Replace with your actual deployed URL (e.g., https://lab-inventory-xxxx.streamlit.app)"
+                help="Replace with your actual deployed URL"
             )
             
             qr_data = f"{app_url}?reagent_id={selected_id}"
             
-            # Settings optimized for ~5mm physical size at 300–600 DPI
             qr = qrcode.QRCode(
-                version=1,                          # Smallest possible QR
-                error_correction=qrcode.ERROR_CORRECT_L,  # Low error correction = smaller size
-                box_size=3,                         # 3 pixels per module → ~60px total
-                border=2,                           # Minimal quiet zone
+                version=1,
+                error_correction=qrcode.ERROR_CORRECT_L,
+                box_size=3,   # Results in ~60px image → ~5mm at 300 DPI
+                border=2,
             )
             qr.add_data(qr_data)
             qr.make(fit=True)
@@ -256,7 +265,7 @@ with tab4:
             img.save(buf, format="PNG")
             byte_im = buf.getvalue()
             
-            st.image(byte_im, caption=f"5mm QR Label – {row['name']} (ID: {selected_id})")
+            st.image(byte_im, caption=f"5mm QR – {row['name']} (ID: {selected_id})")
             st.download_button(
                 label="📥 Download 5mm QR Label",
                 data=byte_im,
@@ -264,9 +273,7 @@ with tab4:
                 mime="image/png"
             )
             st.code(qr_data, language=None)
-            
-            st.success("Perfect for small vials! Print at 300–600 DPI on waterproof label paper.")
-            st.info("Tip: Use Avery or similar weatherproof labels for chemical resistance.")
+            st.success("Ideal for small vials! Print on waterproof labels.")
 
         with col2:
             st.subheader("Quick Lookup by ID")
@@ -295,4 +302,4 @@ with tab5:
         else:
             st.info("No usage logs yet.")
 
-st.caption("Laboratory Reagent Inventory System • Built with Streamlit • Data may reset on reboots (Community Cloud limitation)")
+st.caption("Laboratory Reagent Inventory • Built with Streamlit • Data may reset on reboots")
