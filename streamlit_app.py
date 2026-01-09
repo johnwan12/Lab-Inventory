@@ -1,4 +1,4 @@
-# streamlit_app.py - Laboratory Reagent Inventory System (Final Version)
+# streamlit_app.py - Laboratory Reagent Inventory System (Final Fixed Version)
 
 import streamlit as st
 import pandas as pd
@@ -113,11 +113,11 @@ def load_reagents():
 
 reagents_df = load_reagents()
 
-# -------------------------- Alerts --------------------------
+# -------------------------- Alerts (FIXED) --------------------------
 alerts = []
 today = date.today()
 for _, row in reagents_df.iterrows():
-    if row['quantity'] <= row['low_stock_threshold]:
+    if row['quantity'] <= row['low_stock_threshold']:
         alerts.append(f"⚠️ **Low Stock**: {row['name']} — {row['quantity']:.2f} {row['unit']}")
     if pd.notnull(row['expiration_date']) and row['expiration_date'] < today:
         alerts.append(f"❌ **Expired**: {row['name']} ({row['expiration_date']})")
@@ -155,7 +155,7 @@ with tab1:
 with tab2:
     st.header("Add New Reagent")
     
-    # Dynamic form key to reset all fields after successful add
+    # Dynamic form key to clear fields after add
     if "add_form_key" not in st.session_state:
         st.session_state.add_form_key = 0
     
@@ -187,9 +187,7 @@ with tab2:
                 
                 st.success(f"Added '{name}' successfully!")
                 
-                # Reset form by changing key
                 st.session_state.add_form_key += 1
-                
                 st.cache_data.clear()
                 st.rerun()
 
@@ -254,7 +252,7 @@ with tab4:
             qr = qrcode.QRCode(
                 version=1,
                 error_correction=qrcode.ERROR_CORRECT_L,
-                box_size=3,   # Results in ~60px image → ~5mm at 300 DPI
+                box_size=3,
                 border=2,
             )
             qr.add_data(qr_data)
@@ -273,7 +271,7 @@ with tab4:
                 mime="image/png"
             )
             st.code(qr_data, language=None)
-            st.success("Ideal for small vials! Print on waterproof labels.")
+            st.success("Perfect for small vials! Print at 300–600 DPI on waterproof labels.")
 
         with col2:
             st.subheader("Quick Lookup by ID")
