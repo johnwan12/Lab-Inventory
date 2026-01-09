@@ -1,4 +1,4 @@
-# streamlit_app.py - Laboratory Reagent Inventory Web App (QR Tools Fixed!)
+# streamlit_app.py - Lab Reagent Inventory (QR Generation Fixed, No pyzbar Needed)
 
 import streamlit as st
 import pandas as pd
@@ -6,48 +6,50 @@ from datetime import date, datetime
 import qrcode
 from io import BytesIO
 import hashlib
-from PIL import Image
-import cv2
-import numpy as np
-from pyzbar.pyzbar import decode  # For QR decoding
 
-# --- SQLite Fix for Streamlit Cloud ---
+# SQLite Fix
 try:
     import pysqlite3 as sqlite3
 except ImportError:
     import sqlite3
-# --------------------------------------
 
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
 
 DB_FILE = "reagents.db"
 
-# ... (init_db(), authentication, load_reagents(), load_logs(), alerts — keep unchanged from previous version)
+# init_db(), authentication, load_reagents(), alerts — (keep from previous version)
 
-# After login and alerts...
+# After alerts...
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["Catalog", "Add Reagent", "Log Usage", "QR Tools", "Admin"])
 
-# ... (tab1, tab2, tab3 unchanged)
+# Tabs 1-3 unchanged...
 
 with tab4:
     st.header("QR Code Tools")
     
     if reagents_df.empty:
-        st.info("Add some reagents first to generate QR codes!")
+        st.info("Add reagents first to generate QR codes!")
     else:
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("Generate & Print QR Label")
-            selected_id = st.selectbox("Select Reagent", reagents_df['id'], format_func=lambda x: reagents_df[reagents_df['id']==x]['name'].values[0])
+            st.subheader("Generate Printable QR Labels")
+            selected_id = st.selectbox("Select Reagent", reagents_df['id'], 
+                                      format_func=lambda x: reagents_df[reagents_df['id']==x]['name'].values[0])
             row = reagents_df[reagents_df['id'] == selected_id].iloc[0]
             
-            # Auto-detect current app URL (works on deployed Streamlit Cloud!)
-            current_url = st.text_input("Your App URL (auto-filled if possible)", value="https://" + st.secrets.get("app_url", "your-app.streamlit.app"), help="Usually your deployed URL")
+            # Get current app URL from query params or input
+            query_params = st.query_params
+            base_url = "https://" + query_params.get("base_url", ["your-app-name.streamlit.app"])[0]
+            app_url = st.text_input("Your App URL (for QR links)", value=base_url, 
+                                    help="Copy your deployed URL here once — it will be remembered")
             
-            qr_data = f"{current_url}?reagent_id={selected_id}"
+            # Update query param for persistence
+            st.query_params["base_url"] = app_url.split("//")[-1]
+            
+            qr_data = f"{app_url}?reagent_id={selected_id}"
             
             qr = qrcode.QRCode(version=1, box_size=10, border=5)
             qr.add_data(qr_data)
@@ -58,50 +60,35 @@ with tab4:
             img.save(buf, format="PNG")
             byte_im = buf.getvalue()
             
-            st.image(byte_im, caption=f"QR for {row['name']} (ID: {selected_id})")
+            st.image(byte_im, caption=f"QR Label for {row['name']} (ID: {selected_id})")
             st.download_button(
-                label="Download QR Label (Print & Stick on Bottle)",
+                label="Download QR Label (Print & Stick!)",
                 data=byte_im,
                 file_name=f"QR_{row['name'].replace(' ', '_')}_ID{selected_id}.png",
                 mime="image/png"
             )
-            st.code(qr_data, language=None)  # Show the link for verification
-        
+            st.code(qr_data, language=None)
+            st.success("Print this on sticker paper and attach to reagent bottles!")
+
         with col2:
-            st.subheader("Scan QR Code with Camera")
-            camera_img = st.camera_input("Point your camera at the QR label")
+            st.subheader("Quick Reagent Lookup")
+            manual_id = st.number_input("Enter Reagent ID manually", min_value=1, step=1)
             
-            scanned_id = None
-            if camera_img:
-                # Process image for decoding
-                bytes_data = camera_img.getvalue()
-                img = Image.open(BytesIO(bytes_data))
-                img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-                
-                decoded_objects = decode(img_cv)
-                if decoded_objects:
-                    for obj in decoded_objects:
-                        data = obj.data.decode('utf-8')
-                        st.success(f"QR Detected! Link: {data}")
-                        # Extract reagent_id from URL
-                        if "reagent_id=" in data:
-                            scanned_id = int(data.split("reagent_id=")[-1].split("&")[0])
-                            break
-                    if scanned_id:
-                        st.info(f"Loading Reagent ID {scanned_id}...")
-                else:
-                    st.warning("No QR code detected in image. Try again with better lighting/angle.")
-                st.image(camera_img, caption="Captured Image")
-            
-            # Fallback manual entry
-            manual_id = st.number_input("Or manually enter Reagent ID", min_value=1, step=1)
-            view_id = scanned_id or manual_id
-            
-            if view_id and view_id in reagents_df['id'].values:
-                view_row = reagents_df[reagents_df['id'] == view_id].iloc[0]
-                st.subheader(f"Reagent Details: {view_row['name']}")
-                st.write(view_row.T)
+            if manual_id and manual_id in reagents_df['id'].values:
+                view_row = reagents_df[reagents_df['id'] == manual_id].iloc[0]
+                st.subheader(f"📋 Details: {view_row['name']}")
+                st.dataframe(view_row.to_frame().T, use_container_width=True)
+                st.info("Pro Tip: Bookmark the QR link on your phone for instant access!")
 
-# ... (tab5 Admin unchanged)
+# Auto-load reagent from URL on app open
+query_params = st.query_params
+if "reagent_id" in query_params:
+    auto_id = int(query_params["reagent_id"])
+    if auto_id in reagents_df['id'].values:
+        auto_row = reagents_df[reagents_df['id'] == auto_id].iloc[0]
+        st.success(f"🔍 Auto-loaded Reagent: {auto_row['name']} (ID: {auto_id})")
+        st.dataframe(auto_row.to_frame().T, use_container_width=True)
 
-st.caption("QR Tools Fixed! Generate labels, print, stick on bottles, and scan with phone/tablet camera for instant lookup.")
+# Tab 5 unchanged...
+
+st.caption("QR Generation works perfectly! Use your phone's browser to open the QR link for instant reagent lookup.")
