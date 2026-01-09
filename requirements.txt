@@ -2,6 +2,3 @@ streamlit
 pandas
 qrcode[pil]
 pysqlite3-binary
-pyzbar
-Pillow
-opencv-python-headless  # For image processing (headless = no GUI issues on Cloud)
