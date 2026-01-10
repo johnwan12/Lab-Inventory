@@ -1,172 +1,96 @@
-# streamlit_app.py - Laboratory Reagent Inventory System (With OCR Photo Entry)
-
-import streamlit as st
-import pandas as pd
-from datetime import date, datetime
-import qrcode
-from io import BytesIO
-import hashlib
-import easyocr  # For OCR text extraction from photos
-from PIL import Image
-import numpy as np
-
-# SQLite compatibility for Streamlit Cloud
-try:
-    import pysqlite3 as sqlite3
-except ImportError:
-    import sqlite3
-
-st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
-st.title("🧪 Laboratory Reagent Inventory System")
-
-DB_FILE = "reagents.db"
-
-# -------------------------- Database Initialization --------------------------
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 username TEXT UNIQUE NOT NULL,
-                 password_hash TEXT NOT NULL,
-                 role TEXT NOT NULL)''')
-    
-    c.execute('''CREATE TABLE IF NOT EXISTS reagents (
-                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 name TEXT NOT NULL,
-                 cas_number TEXT,
-                 supplier TEXT,
-                 location TEXT NOT NULL,
-                 quantity REAL NOT NULL,
-                 unit TEXT NOT NULL,
-                 expiration_date TEXT,
-                 low_stock_threshold REAL DEFAULT 10.0)''')
-    
-    c.execute('''CREATE TABLE IF NOT EXISTS usage_logs (
-                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 reagent_id INTEGER,
-                 user TEXT,
-                 quantity_used REAL,
-                 timestamp TEXT,
-                 notes TEXT)''')
-    
-    # Default users - CHANGE PASSWORDS IMMEDIATELY!
-    hashed_admin = hashlib.sha256("admin123".encode()).hexdigest()
-    hashed_user = hashlib.sha256("user123".encode()).hexdigest()
-    c.execute("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-              ("admin", hashed_admin, "admin"))
-    c.execute("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-              ("user", hashed_user, "user"))
-    
-    conn.commit()
-    conn.close()
-
-init_db()
-
-# -------------------------- Authentication --------------------------
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-    st.session_state.username = None
-    st.session_state.role = None
-
-if not st.session_state.authenticated:
-    st.subheader("🔐 Login Required")
-    with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login")
-        if submitted:
-            conn = sqlite3.connect(DB_FILE)
-            c = conn.cursor()
-            c.execute("SELECT role FROM users WHERE username=? AND password_hash=?",
-                      (username, hashlib.sha256(password.encode()).hexdigest()))
-            result = c.fetchone()
-            conn.close()
-            if result:
-                st.session_state.authenticated = True
-                st.session_state.username = username
-                st.session_state.role = result[0]
-                st.success(f"Welcome, {username}! ({result[0].capitalize()})")
-                st.rerun()
-            else:
-                st.error("Invalid username or password")
-    st.stop()
-
-if st.sidebar.button("🚪 Logout"):
-    for key in ["authenticated", "username", "role"]:
-        del st.session_state[key]
-    st.rerun()
-
-st.sidebar.success(f"Logged in as **{st.session_state.username}** ({st.session_state.role})")
-
-# -------------------------- Load Reagents --------------------------
-@st.cache_data(ttl=60)
-def load_reagents():
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        df = pd.read_sql_query("SELECT * FROM reagents ORDER BY name", conn)
-        conn.close()
-        if not df.empty:
-            df['expiration_date'] = pd.to_datetime(df['expiration_date'], errors='coerce').dt.date
-        return df
-    except Exception:
-        return pd.DataFrame(columns=['id', 'name', 'cas_number', 'supplier', 'location',
-                                    'quantity', 'unit', 'expiration_date', 'low_stock_threshold'])
-
-reagents_df = load_reagents()
-
-# -------------------------- Alerts --------------------------
-alerts = []
-today = date.today()
-for _, row in reagents_df.iterrows():
-    if row['quantity'] <= row['low_stock_threshold']:
-        alerts.append(f"⚠️ **Low Stock**: {row['name']} — {row['quantity']:.2f} {row['unit']}")
-    if pd.notnull(row['expiration_date']) and row['expiration_date'] < today:
-        alerts.append(f"❌ **Expired**: {row['name']} ({row['expiration_date']})")
-
-if alerts:
-    st.warning("\n\n".join(alerts))
-
-# Auto-load reagent from URL
-query_params = st.query_params
-if "reagent_id" in query_params:
-    try:
-        auto_id = int(query_params["reagent_id"][0])
-        if auto_id in reagents_df['id'].values:
-            auto_row = reagents_df[reagents_df['id'] == auto_id].iloc[0]
-            st.success(f"🔍 Auto-loaded: {auto_row['name']} (ID: {auto_id})")
-            st.dataframe(auto_row.to_frame().T, use_container_width=True)
-    except:
-        pass
-
-# -------------------------- Main Tabs --------------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Catalog", "Add Reagent", "Log Usage", "QR Tools", "Admin"])
-
-with tab1:
-    st.header("Reagent Catalog")
-    search = st.text_input("🔍 Search by Name, CAS, or Location")
-    display_df = reagents_df
-    if search:
-        display_df = reagents_df[
-            reagents_df['name'].str.contains(search, case=False, na=False) |
-            reagents_df['cas_number'].str.contains(search, case=False, na=False) |
-            reagents_df['location'].str.contains(search, case=False, na=False)
-        ]
-    st.dataframe(display_df.style.format({"quantity": "{:.2f}"}), use_container_width=True)
+# 在 tab2 中添加/替换为这个增强版“Quick Entry via Photo”部分
 
 with tab2:
     st.header("Add New Reagent")
     
-    # Dynamic form key to clear fields after add
+    # ... 保持原有的手动表单部分不变 ...
+    
+    # 动态表单key（保持自动清空功能）
     if "add_form_key" not in st.session_state:
         st.session_state.add_form_key = 0
     
+    # 同时也保存OCR解析出来的建议值（session state）
+    if "ocr_suggestions" not in st.session_state:
+        st.session_state.ocr_suggestions = {
+            "name": "",
+            "cas_number": "",
+            "supplier": "",
+            "catalog_number": ""  # 额外字段，可选
+        }
+    
+    st.subheader("📸 Quick Entry via Photo (OCR)")
+    st.info("拍试剂标签照片或上传图片 → 系统自动尝试提取名称、CAS号、货号、供应商等信息")
+
+    # 拍照或上传
+    uploaded_photo = (
+        st.camera_input("直接用摄像头拍照") or
+        st.file_uploader("或上传已拍好的照片", type=["jpg", "png", "jpeg"])
+    )
+    
+    if uploaded_photo:
+        st.image(uploaded_photo, caption="试剂标签照片", width=400)
+        
+        with st.spinner("正在OCR识别文本... (首次可能稍慢)"):
+            try:
+                # 初始化EasyOCR（只加载一次比较好，但Streamlit每次rerun都会重载，可优化）
+                reader = easyocr.Reader(['en'], gpu=False)  # 'en'英文为主，必要时加'ch_sim'
+                
+                img = Image.open(uploaded_photo)
+                img_array = np.array(img)
+                
+                results = reader.readtext(img_array, detail=0)  # 只取文本
+                extracted_text = " ".join(results).upper()  # 统一大写方便匹配
+                
+                st.text_area("原始提取文本（可参考）", extracted_text, height=120)
+                
+                # 简单规则解析（可根据实际标签格式不断优化）
+                suggestions = {"name": "", "cas_number": "", "supplier": "", "catalog_number": ""}
+                
+                # 尝试提取常见字段（关键词匹配，可扩展正则或更智能方法）
+                words = extracted_text.split()
+                for i, word in enumerate(words):
+                    # CAS号通常是 数字-数字-数字 格式
+                    if '-' in word and len(word.split('-')) == 3 and all(part.isdigit() for part in word.split('-')):
+                        suggestions["cas_number"] = word
+                    
+                    # 常见供应商关键词
+                    if any(kw in word for kw in ["SIGMA", "ALDRICH", "MERCK", "THERMO", "FISHER", "ACROS", "TCI"]):
+                        suggestions["supplier"] = word
+                    
+                    # Catalog / Cat.No. / Product No. 后面往往是货号
+                    if any(kw in word for kw in ["CAT", "CAT.", "CATALOG", "CATALOGUE", "PRODUCT", "P/N", "REF"]):
+                        if i+1 < len(words):
+                            suggestions["catalog_number"] = words[i+1]
+                            # 试剂名称往往在货号前面几行，可尝试取前几个词
+                            if i > 2:
+                                suggestions["name"] = " ".join(words[max(0,i-4):i])
+                
+                # 如果没提取到名称，用前几行文本作为fallback
+                if not suggestions["name"] and len(words) > 3:
+                    suggestions["name"] = " ".join(words[:5])
+                
+                # 保存建议值到session
+                st.session_state.ocr_suggestions = suggestions
+                
+                st.success("OCR提取完成！建议值已自动填充到下方表单，可直接修改后添加")
+                
+            except Exception as e:
+                st.error(f"OCR处理失败：{str(e)}\n请确保图片清晰、文字可辨识。")
+
+    # 显示并自动填充表单（使用session中的OCR建议值）
+    st.markdown("### 使用OCR建议值（可编辑）")
+    
     with st.form(key=f"add_form_{st.session_state.add_form_key}"):
         col1, col2 = st.columns(2)
-        name = col1.text_input("Name*", help="Required")
-        cas = col1.text_input("CAS Number")
-        supplier = col2.text_input("Supplier")
+        
+        # 预填OCR建议值（如果有）
+        name_default = st.session_state.ocr_suggestions.get("name", "")
+        cas_default = st.session_state.ocr_suggestions.get("cas_number", "")
+        supplier_default = st.session_state.ocr_suggestions.get("supplier", "")
+        
+        name = col1.text_input("Name*", value=name_default, help="Required")
+        cas = col1.text_input("CAS Number", value=cas_default)
+        supplier = col2.text_input("Supplier", value=supplier_default)
         location = col2.text_input("Location*", help="e.g., Cabinet A - Shelf 2")
         quantity = col1.number_input("Initial Quantity*", min_value=0.0, step=0.1)
         unit = col1.selectbox("Unit", ["g", "mg", "ml", "L", "bottles", "vials", "kg"])
@@ -178,6 +102,7 @@ with tab2:
             if not name.strip() or not location.strip():
                 st.error("Name and Location are required!")
             else:
+                # ... 原有的插入数据库代码保持不变 ...
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
                 c.execute("""INSERT INTO reagents 
@@ -188,137 +113,12 @@ with tab2:
                 conn.commit()
                 conn.close()
                 
-                st.success(f"Added '{name}' successfully!")
+                st.success(f"成功添加 '{name}'！")
                 
+                # 清空OCR建议值，准备下一次拍照
+                st.session_state.ocr_suggestions = {"name": "", "cas_number": "", "supplier": "", "catalog_number": ""}
+                
+                # 表单重置
                 st.session_state.add_form_key += 1
                 st.cache_data.clear()
                 st.rerun()
-
-    # NEW: Photo Entry with OCR
-    st.subheader("Quick Entry via Photo (OCR)")
-    uploaded_photo = st.camera_input("Take a photo of the reagent label") or st.file_uploader("Or upload a photo", type=["jpg", "png", "jpeg"])
-    
-    if uploaded_photo:
-        st.image(uploaded_photo, caption="Uploaded Reagent Label")
-        
-        # Use EasyOCR to extract text
-        reader = easyocr.Reader(['en'])  # English language; add ['ch_sim'] for Chinese if needed
-        img = Image.open(uploaded_photo)
-        img_array = np.array(img)
-        ocr_results = reader.readtext(img_array)
-        
-        extracted_text = " ".join([text for _, text, _ in ocr_results])
-        st.text_area("Extracted Text (Edit as needed)", extracted_text, height=100)
-        
-        st.info("Review and copy relevant info (e.g., name, CAS, catalog #) into the form above to add the reagent.")
-
-with tab3:
-    st.header("Log Reagent Usage")
-    if reagents_df.empty:
-        st.info("No reagents available yet.")
-    else:
-        reagent_id = st.selectbox(
-            "Select Reagent",
-            options=reagents_df['id'],
-            format_func=lambda x: f"{reagents_df.loc[reagents_df['id']==x, 'name'].values[0]} "
-                                 f"({reagents_df.loc[reagents_df['id']==x, 'quantity'].values[0]:.2f} "
-                                 f"{reagents_df.loc[reagents_df['id']==x, 'unit'].values[0]} left)"
-        )
-        col1, col2 = st.columns(2)
-        qty_used = col1.number_input("Quantity Used", min_value=0.01, step=0.1)
-        notes = col2.text_area("Notes (optional)")
-
-        if st.button("Record Usage"):
-            current_qty = reagents_df.loc[reagents_df['id'] == reagent_id, 'quantity'].values[0]
-            if qty_used > current_qty:
-                st.error("Not enough stock available!")
-            else:
-                conn = sqlite3.connect(DB_FILE)
-                c = conn.cursor()
-                c.execute("UPDATE reagents SET quantity = quantity - ? WHERE id = ?", (qty_used, reagent_id))
-                c.execute("INSERT INTO usage_logs (reagent_id, user, quantity_used, timestamp, notes) "
-                          "VALUES (?, ?, ?, ?, ?)",
-                          (reagent_id, st.session_state.username, qty_used, datetime.now().isoformat(), notes))
-                conn.commit()
-                conn.close()
-                st.success("Usage recorded successfully!")
-                st.cache_data.clear()
-                st.rerun()
-
-with tab4:
-    st.header("QR Code Tools")
-    if reagents_df.empty:
-        st.info("Add reagents first to generate QR codes.")
-    else:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Generate 5mm × 5mm QR Label")
-            selected_id = st.selectbox(
-                "Select Reagent",
-                reagents_df['id'],
-                format_func=lambda x: reagents_df[reagents_df['id']==x]['name'].values[0],
-                key="qr_select"
-            )
-            row = reagents_df[reagents_df['id'] == selected_id].iloc[0]
-            
-            app_url = st.text_input(
-                "Your App URL (for QR links)",
-                value="https://your-app-name.streamlit.app",
-                help="Replace with your actual deployed URL"
-            )
-            
-            qr_data = f"{app_url}?reagent_id={selected_id}"
-            
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.ERROR_CORRECT_L,
-                box_size=3,
-                border=2,
-            )
-            qr.add_data(qr_data)
-            qr.make(fit=True)
-            
-            img = qr.make_image(fill_color="black", back_color="white")
-            buf = BytesIO()
-            img.save(buf, format="PNG")
-            byte_im = buf.getvalue()
-            
-            st.image(byte_im, caption=f"5mm QR – {row['name']} (ID: {selected_id})")
-            st.download_button(
-                label="📥 Download 5mm QR Label",
-                data=byte_im,
-                file_name=f"QR_5mm_{row['name'].replace(' ', '_')}_ID{selected_id}.png",
-                mime="image/png"
-            )
-            st.code(qr_data, language=None)
-            st.success("Perfect for small vials! Print at 300–600 DPI on waterproof labels.")
-
-        with col2:
-            st.subheader("Quick Lookup by ID")
-            manual_id = st.number_input("Enter Reagent ID", min_value=1, step=1, key="manual_lookup")
-            if manual_id and manual_id in reagents_df['id'].values:
-                view_row = reagents_df[reagents_df['id'] == manual_id].iloc[0]
-                st.markdown(f"### {view_row['name']}")
-                st.dataframe(view_row.to_frame().T, use_container_width=True)
-
-with tab5:
-    if st.session_state.role != "admin":
-        st.error("🚫 Admin access required")
-    else:
-        st.header("Admin Dashboard")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Reagents", len(reagents_df))
-        col2.metric("Low Stock Items", len([a for a in alerts if "Low" in a]))
-        col3.metric("Expired Items", len([a for a in alerts if "Expired" in a]))
-        
-        st.subheader("Recent Usage Logs")
-        conn = sqlite3.connect(DB_FILE)
-        logs_df = pd.read_sql_query("SELECT * FROM usage_logs ORDER BY timestamp DESC LIMIT 20", conn)
-        conn.close()
-        if not logs_df.empty:
-            st.dataframe(logs_df)
-        else:
-            st.info("No usage logs yet.")
-
-st.caption("Laboratory Reagent Inventory • Built with Streamlit • Data may reset on reboots")
