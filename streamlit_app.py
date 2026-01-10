@@ -1,4 +1,4 @@
-# streamlit_app.py - Laboratory Reagent Inventory System (Final Fixed Version)
+# streamlit_app.py - Laboratory Reagent Inventory System (With OCR Photo Entry)
 
 import streamlit as st
 import pandas as pd
@@ -6,6 +6,9 @@ from datetime import date, datetime
 import qrcode
 from io import BytesIO
 import hashlib
+import easyocr  # For OCR text extraction from photos
+from PIL import Image
+import numpy as np
 
 # SQLite compatibility for Streamlit Cloud
 try:
@@ -113,7 +116,7 @@ def load_reagents():
 
 reagents_df = load_reagents()
 
-# -------------------------- Alerts (FIXED) --------------------------
+# -------------------------- Alerts --------------------------
 alerts = []
 today = date.today()
 for _, row in reagents_df.iterrows():
@@ -190,6 +193,24 @@ with tab2:
                 st.session_state.add_form_key += 1
                 st.cache_data.clear()
                 st.rerun()
+
+    # NEW: Photo Entry with OCR
+    st.subheader("Quick Entry via Photo (OCR)")
+    uploaded_photo = st.camera_input("Take a photo of the reagent label") or st.file_uploader("Or upload a photo", type=["jpg", "png", "jpeg"])
+    
+    if uploaded_photo:
+        st.image(uploaded_photo, caption="Uploaded Reagent Label")
+        
+        # Use EasyOCR to extract text
+        reader = easyocr.Reader(['en'])  # English language; add ['ch_sim'] for Chinese if needed
+        img = Image.open(uploaded_photo)
+        img_array = np.array(img)
+        ocr_results = reader.readtext(img_array)
+        
+        extracted_text = " ".join([text for _, text, _ in ocr_results])
+        st.text_area("Extracted Text (Edit as needed)", extracted_text, height=100)
+        
+        st.info("Review and copy relevant info (e.g., name, CAS, catalog #) into the form above to add the reagent.")
 
 with tab3:
     st.header("Log Reagent Usage")
