@@ -1,9 +1,5 @@
 streamlit
 pandas
-qrcode[pil]
-pysqlite3-binary
-easyocr
-torch
-Pillow
-numpy
-openpyxl
+pillow
+pytesseract
+openpyxl   # optional but good for Excel
