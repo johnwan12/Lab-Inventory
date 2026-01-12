@@ -1,16 +1,14 @@
-# streamlit_app.py - Laboratory Reagent Inventory System (2026 - fully fixed)
-# Features: bulk Excel import, photo OCR, admin edit/delete, exp date warning, location dropdown+custom
-
+# streamlit_app.py - Laboratory Reagent Inventory System (2026 - updated)
+# Features: bulk Excel import, photo OCR (disabled note), admin edit/delete, exp date warning, location dropdown+custom
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime
 import qrcode
 from io import BytesIO
 import hashlib
-import easyocr
+# import easyocr  # commented out - not reliably supported on Streamlit Cloud
 from PIL import Image
 import numpy as np
-
 try:
     import pysqlite3 as sqlite3
 except ImportError:
@@ -25,13 +23,13 @@ DB_FILE = "reagents.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    
+   
     c.execute('''CREATE TABLE IF NOT EXISTS users (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
                  username TEXT UNIQUE NOT NULL,
                  password_hash TEXT NOT NULL,
                  role TEXT NOT NULL)''')
-    
+   
     c.execute('''CREATE TABLE IF NOT EXISTS reagents (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
                  name TEXT NOT NULL,
@@ -41,8 +39,8 @@ def init_db():
                  quantity REAL NOT NULL,
                  unit TEXT NOT NULL,
                  expiration_date TEXT,
-                 low_stock_threshold REAL DEFAULT 10.0)''')
-    
+                 low_stock_threshold REAL DEFAULT 1.0)''')  # ← changed to 1.0
+   
     c.execute('''CREATE TABLE IF NOT EXISTS usage_logs (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
                  reagent_id INTEGER,
@@ -50,14 +48,14 @@ def init_db():
                  quantity_used REAL,
                  timestamp TEXT,
                  notes TEXT)''')
-    
+   
     hashed_admin = hashlib.sha256("admin123".encode()).hexdigest()
     hashed_user = hashlib.sha256("user123".encode()).hexdigest()
     c.execute("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
               ("admin", hashed_admin, "admin"))
     c.execute("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
               ("user", hashed_user, "user"))
-    
+   
     conn.commit()
     conn.close()
 
@@ -94,13 +92,18 @@ if not st.session_state.authenticated:
 
 if st.sidebar.button("🚪 Logout"):
     for key in ["authenticated", "username", "role"]:
-        del st.session_state[key]
+        if key in st.session_state:
+            del st.session_state[key]
     st.rerun()
 
 st.sidebar.success(f"Logged in as **{st.session_state.username}** ({st.session_state.role})")
 
+# ── Tab navigation control ──────────────────────────────────────────────────
+if "active_tab" not in st.session_state:
+    st.session_state.active_tab = "Catalog"
+
 # ── Load Reagents ───────────────────────────────────────────────────────────
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def load_reagents():
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -118,8 +121,9 @@ reagents_df = load_reagents()
 alerts = []
 today = date.today()
 for _, row in reagents_df.iterrows():
-    if row['quantity'] <= row['low_stock_threshold']:
-        alerts.append(f"⚠️ **Low Stock**: {row['name']} — {row['quantity']:.2f} {row['unit']}")
+    threshold = row.get('low_stock_threshold', 1.0)  # safe fallback
+    if row['quantity'] <= threshold:
+        alerts.append(f"⚠️ **Low Stock**: {row['name']} — {row['quantity']:.2f} {row['unit']} (threshold: {threshold})")
     if pd.notnull(row['expiration_date']) and row['expiration_date'] < today:
         alerts.append(f"❌ **Expired**: {row['name']} ({row['expiration_date']})")
 
@@ -127,13 +131,16 @@ if alerts:
     st.warning("\n\n".join(alerts))
 
 # ── Tabs ────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Catalog", "Add Reagent", "Log Usage", "QR Tools", "Admin"])
+tab_names = ["Catalog", "Add Reagent", "Log Usage", "QR Tools", "Admin"]
+active_index = tab_names.index(st.session_state.active_tab) if st.session_state.active_tab in tab_names else 0
 
-# Catalog – admin only edit & delete
+tab1, tab2, tab3, tab4, tab5 = st.tabs(tab_names)
+
+# ── Catalog ─────────────────────────────────────────────────────────────────
 with tab1:
     st.header("Reagent Catalog")
     search = st.text_input("🔍 Search by Name, CAS, or Location")
-    
+   
     display_df = reagents_df
     if search:
         display_df = reagents_df[
@@ -141,19 +148,19 @@ with tab1:
             reagents_df['cas_number'].str.contains(search, case=False, na=False) |
             reagents_df['location'].str.contains(search, case=False, na=False)
         ]
-
+   
     if display_df.empty:
         st.info("No reagents found.")
     else:
         if st.session_state.role == "admin":
             editable_df = display_df.copy()
             editable_df["Delete"] = False
-            editable_df["Edit"]   = False
-            
+            editable_df["Edit"] = False
+           
             edited_df = st.data_editor(
                 editable_df,
                 column_config={
-                    "Edit":   st.column_config.CheckboxColumn("Edit",   help="Check to edit",   default=False),
+                    "Edit": st.column_config.CheckboxColumn("Edit", help="Check to edit", default=False),
                     "Delete": st.column_config.CheckboxColumn("Delete", help="Check to delete", default=False),
                     "id": "ID",
                     "name": "Name",
@@ -163,33 +170,33 @@ with tab1:
                     "quantity": st.column_config.NumberColumn("Quantity", format="%.2f"),
                     "unit": "Unit",
                     "expiration_date": "Expiration Date",
-                    "low_stock_threshold": "Low Stock Threshold",
+                    "low_stock_threshold": st.column_config.NumberColumn("Low Stock Threshold", format="%.1f"),
                 },
                 hide_index=True,
                 use_container_width=True,
                 key="catalog_editor"
             )
-            
-            # Edit logic
+           
+            # Edit logic (only first selected for simplicity)
             to_edit = edited_df[edited_df["Edit"] == True]["id"].tolist()
             if to_edit:
                 edit_id = to_edit[0]
                 reagent = reagents_df[reagents_df['id'] == edit_id].iloc[0]
-                
+               
                 with st.expander(f"✏️ Edit: {reagent['name']} (ID: {edit_id})", expanded=True):
-                    e_name      = st.text_input("Name", value=reagent['name'])
-                    e_cas       = st.text_input("CAS Number", value=reagent['cas_number'] or "")
-                    e_supplier  = st.text_input("Supplier", value=reagent['supplier'] or "")
-                    e_location  = st.text_input("Location", value=reagent['location'])
-                    e_quantity  = st.number_input("Quantity", value=float(reagent['quantity']), step=0.1, min_value=0.0)
-                    e_unit      = st.selectbox("Unit", ["g","mg","ml","L","bottles","vials","kg"], index=["g","mg","ml","L","bottles","vials","kg"].index(reagent['unit']))
-                    e_exp       = st.date_input("Expiration Date", value=reagent['expiration_date'] if pd.notnull(reagent['expiration_date']) else None)
-                    e_threshold = st.number_input("Low Stock Threshold", value=float(reagent['low_stock_threshold']), min_value=0.0)
-                    
+                    e_name = st.text_input("Name", value=reagent['name'])
+                    e_cas = st.text_input("CAS Number", value=reagent['cas_number'] or "")
+                    e_supplier = st.text_input("Supplier", value=reagent['supplier'] or "")
+                    e_location = st.text_input("Location", value=reagent['location'])
+                    e_quantity = st.number_input("Quantity", value=float(reagent['quantity']), step=0.1, min_value=0.0)
+                    e_unit = st.selectbox("Unit", ["g","mg","ml","L","bottles","vials","kg"], index=["g","mg","ml","L","bottles","vials","kg"].index(reagent['unit']))
+                    e_exp = st.date_input("Expiration Date", value=reagent['expiration_date'] if pd.notnull(reagent['expiration_date']) else None)
+                    e_threshold = st.number_input("Low Stock Threshold", value=float(reagent.get('low_stock_threshold', 1.0)), min_value=0.0, step=0.1)
+                   
                     if st.button("Save Changes", type="primary"):
-                        today = date.today()
-                        if e_exp and e_exp < today:
-                            st.error(f"Cannot save: Expiration date is in the past (today: {today}).")
+                        today_date = date.today()
+                        if e_exp and e_exp < today_date:
+                            st.error(f"Cannot save: Expiration date is in the past (today: {today_date}).")
                         else:
                             conn = sqlite3.connect(DB_FILE)
                             c = conn.cursor()
@@ -204,7 +211,7 @@ with tab1:
                             st.success("Reagent updated!")
                             st.cache_data.clear()
                             st.rerun()
-            
+           
             # Delete logic
             to_delete = edited_df[edited_df["Delete"] == True]["id"].tolist()
             if to_delete:
@@ -223,109 +230,113 @@ with tab1:
             st.dataframe(display_df.style.format({"quantity": "{:.2f}"}), use_container_width=True)
             st.info("Only admin users can edit or delete reagents.")
 
-# Add Reagent – bulk Excel + single + photo OCR
+# ── Add Reagent ─────────────────────────────────────────────────────────────
 with tab2:
+    if "bulk_last_import" in st.session_state:
+        st.caption(st.session_state.bulk_last_import)
+   
     st.header("Add Reagent")
-    
+   
     # Bulk Excel import
     st.subheader("Bulk Add from Excel")
     uploaded_excel = st.file_uploader("Upload Excel (.xlsx/.xls)", type=["xlsx", "xls"])
-    
+   
     if uploaded_excel is not None:
         try:
             df_excel = pd.read_excel(uploaded_excel)
             df_excel.columns = df_excel.columns.str.strip().str.lower()
-            
-            rename_map = {
-                'item': 'name',
-                'supplier item identifier': 'cas_number',
-            }
+           
+            rename_map = {'item': 'name', 'supplier item identifier': 'cas_number'}
             df_excel = df_excel.rename(columns=rename_map)
-            
+           
             keep_cols = ['name', 'cas_number', 'supplier']
             available_cols = [c for c in keep_cols if c in df_excel.columns]
             preview_df = df_excel[available_cols].copy()
-            
+           
             st.write("Preview of data to import (first 10 rows):")
             st.dataframe(preview_df.head(10), use_container_width=True)
-            
+           
             if 'name' not in preview_df.columns:
-                st.error("Excel must contain a column named 'Item' (case insensitive).")
+                st.error("Excel must contain a column named 'Item' (or similar – case insensitive).")
             else:
                 if st.button("Confirm Import All Valid Rows", type="primary"):
                     conn = sqlite3.connect(DB_FILE)
                     c = conn.cursor()
                     imported = 0
-                    
+                   
                     for _, row in df_excel.iterrows():
                         name = str(row.get('name', '')).strip()
                         if not name:
                             continue
-                        
+                       
                         cas = str(row.get('cas_number', '')).strip() or None
                         supplier = str(row.get('supplier', '')).strip() or None
-                        
-                        # Defaults for missing fields
-                        location = "Default Location"  # ← you can change this
+                       
+                        location = "Default Location"
                         quantity = 1.0
                         unit = "bottles"
                         exp_date = None
-                        threshold = 10.0
-                        
-                        c.execute("""INSERT INTO reagents 
+                        threshold = 1.0  # ← changed to 1.0
+                       
+                        c.execute("""INSERT INTO reagents
                                     (name, cas_number, supplier, location, quantity, unit, expiration_date, low_stock_threshold)
                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                                   (name, cas, supplier, location, quantity, unit,
                                    str(exp_date) if exp_date else None, threshold))
                         imported += 1
-                    
+                   
                     conn.commit()
                     conn.close()
-                    
-                    st.success(f"Imported {imported} reagents successfully!")
-                    st.cache_data.clear()
-                    st.rerun()
+                   
+                    if imported > 0:
+                        st.success(f"Imported {imported} reagents successfully!")
+                        st.session_state.active_tab = "Add Reagent"
+                        st.session_state.bulk_last_import = f"Last bulk import: {imported} items • {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.info("No valid rows were imported.")
         except Exception as e:
             st.error(f"Error reading Excel: {str(e)}")
-    
+   
     st.markdown("---")
-    
+   
     # Single entry form
     if "add_form_key" not in st.session_state:
         st.session_state.add_form_key = 0
-    
+   
     with st.form(key=f"add_form_{st.session_state.add_form_key}"):
         col1, col2 = st.columns(2)
-        
+       
         name = col1.text_input("Name*", help="Required")
         cas = col1.text_input("CAS Number")
         supplier = col2.text_input("Supplier")
-        
+       
         location_preset = col2.selectbox(
             "Location*",
             options=["Scrappy-Doo", "Daphne", "Tom", "Jerry", "Scooby-Doo", "Velma", "Custom input"]
         )
-        
+       
         custom_location = ""
         if location_preset == "Custom input":
             custom_location = col2.text_input("Custom Location", placeholder="e.g., Cabinet B - Shelf 4")
-        
+       
         final_location = custom_location.strip() if location_preset == "Custom input" else location_preset
-        
+       
         quantity = col1.number_input("Initial Quantity*", min_value=0.0, step=0.1)
         unit = col1.selectbox("Unit", ["g", "mg", "ml", "L", "bottles", "vials", "kg"])
-        
+       
         exp_date = col2.date_input("Expiration Date", value=None)
-        
+       
         today = date.today()
         if exp_date:
             if exp_date < today:
                 st.error(f"⚠️ Warning: Expiration date ({exp_date}) already passed! (Today: {today})")
             elif exp_date == today:
                 st.warning(f"⚠️ Note: Expires today ({exp_date}).")
-        
-        threshold = col2.number_input("Low Stock Threshold", value=10.0, min_value=0.0)
-
+       
+        threshold = col2.number_input("Low Stock Threshold", value=1.0, min_value=0.0, step=0.1)  # ← changed to 1.0
+       
         submitted = st.form_submit_button("Add Reagent")
         if submitted:
             if not name.strip() or not final_location:
@@ -333,38 +344,27 @@ with tab2:
             else:
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
-                c.execute("""INSERT INTO reagents 
+                c.execute("""INSERT INTO reagents
                             (name, cas_number, supplier, location, quantity, unit, expiration_date, low_stock_threshold)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                           (name, cas or None, supplier or None, final_location, quantity, unit,
                            str(exp_date) if exp_date else None, threshold))
                 conn.commit()
                 conn.close()
-                
+               
                 st.success(f"Added '{name}' successfully!")
                 st.session_state.add_form_key += 1
                 st.cache_data.clear()
                 st.rerun()
 
-    # Photo OCR
+    # Photo OCR – disabled
     st.subheader("Quick Entry via Photo (OCR)")
-    photo = st.camera_input("Take photo") or st.file_uploader("Upload photo", type=["jpg","png","jpeg"])
-    if photo:
-        st.image(photo, width=400)
-        with st.spinner("OCR..."):
-            try:
-                reader = easyocr.Reader(['en'], gpu=False)
-                result = reader.readtext(np.array(Image.open(photo)), detail=0)
-                text = " ".join(result).upper()
-                st.text_area("Extracted Text", text, height=100)
-                st.info("Copy relevant info to the form above.")
-            except Exception as e:
-                st.error(f"OCR failed: {str(e)}")
+    st.info("OCR feature is temporarily disabled (easyocr compatibility issues on hosted environments).")
 
-# Log Reagent Usage – fixed & reliable
+# ── Log Reagent Usage ───────────────────────────────────────────────────────
 with tab3:
     st.header("Log Reagent Usage")
-    
+   
     if reagents_df.empty:
         st.warning("No reagents in inventory yet.")
         st.info("Please add some reagents first in the 'Add Reagent' tab.")
@@ -373,23 +373,23 @@ with tab3:
             st.rerun()
     else:
         current_reagents = load_reagents()
-        
+       
         reagent_options = current_reagents['id'].tolist()
         reagent_labels = [
             f"{row['name']} (ID: {row['id']}) – {row['quantity']:.2f} {row['unit']} left"
             for _, row in current_reagents.iterrows()
         ]
-        
+       
         selected_id = st.selectbox(
             "Select Reagent",
             options=reagent_options,
             format_func=lambda x: next((l for i,l in zip(reagent_options, reagent_labels) if i == x), str(x)),
             key="log_usage_select"
         )
-        
+       
         if selected_id:
             row = current_reagents[current_reagents['id'] == selected_id].iloc[0]
-            
+           
             col1, col2 = st.columns(2)
             qty_used = col1.number_input(
                 "Quantity Used",
@@ -400,7 +400,7 @@ with tab3:
                 help=f"Available: {row['quantity']:.2f} {row['unit']}"
             )
             notes = col2.text_area("Notes (optional)", height=80)
-            
+           
             if st.button("Record Usage", type="primary"):
                 if qty_used > row['quantity']:
                     st.error("Cannot use more than available quantity!")
@@ -414,17 +414,17 @@ with tab3:
                                   (selected_id, st.session_state.username, qty_used, datetime.now().isoformat(), notes))
                         conn.commit()
                         conn.close()
-                        
+                       
                         st.success(f"Usage logged! Deducted {qty_used} {row['unit']} from {row['name']}.")
                         st.cache_data.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error logging usage: {str(e)}")
 
-# QR Tools & Admin Dashboard (simplified – add your full code if needed)
+# ── QR Tools & Admin ────────────────────────────────────────────────────────
 with tab4:
     st.header("QR Code Tools")
-    st.info("QR generation code here...")
+    st.info("QR generation & scanning coming soon...")
 
 with tab5:
     if st.session_state.role != "admin":
