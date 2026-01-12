@@ -1,18 +1,23 @@
-# streamlit_app.py - Laboratory Reagent Inventory System (2026 - updated)
-# Features: bulk Excel import, photo OCR (disabled note), admin edit/delete, exp date warning, location dropdown+custom
+# streamlit_app.py - Laboratory Reagent Inventory System (2026 - updated with pytesseract OCR)
+# Features: bulk Excel import, photo OCR (now using pytesseract), admin edit/delete, exp date warning, location dropdown+custom
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime
-import qrcode
-from io import BytesIO
 import hashlib
-# import easyocr  # commented out - not reliably supported on Streamlit Cloud
 from PIL import Image
-import numpy as np
+import pytesseract  # For OCR - requires Tesseract installed on system/host
 try:
     import pysqlite3 as sqlite3
 except ImportError:
     import sqlite3
+
+# Note for deployment on Streamlit Cloud:
+# 1. Add to repo root: packages.txt with:
+#    tesseract-ocr
+#    tesseract-ocr-eng
+# 2. Add to requirements.txt:
+#    pytesseract
+#    pillow
 
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
@@ -39,7 +44,7 @@ def init_db():
                  quantity REAL NOT NULL,
                  unit TEXT NOT NULL,
                  expiration_date TEXT,
-                 low_stock_threshold REAL DEFAULT 1.0)''')  # ← changed to 1.0
+                 low_stock_threshold REAL DEFAULT 1.0)''')
    
     c.execute('''CREATE TABLE IF NOT EXISTS usage_logs (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,7 +126,7 @@ reagents_df = load_reagents()
 alerts = []
 today = date.today()
 for _, row in reagents_df.iterrows():
-    threshold = row.get('low_stock_threshold', 1.0)  # safe fallback
+    threshold = row.get('low_stock_threshold', 1.0)
     if row['quantity'] <= threshold:
         alerts.append(f"⚠️ **Low Stock**: {row['name']} — {row['quantity']:.2f} {row['unit']} (threshold: {threshold})")
     if pd.notnull(row['expiration_date']) and row['expiration_date'] < today:
@@ -136,7 +141,7 @@ active_index = tab_names.index(st.session_state.active_tab) if st.session_state.
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(tab_names)
 
-# ── Catalog ─────────────────────────────────────────────────────────────────
+# ── Catalog (unchanged) ─────────────────────────────────────────────────────
 with tab1:
     st.header("Reagent Catalog")
     search = st.text_input("🔍 Search by Name, CAS, or Location")
@@ -177,7 +182,6 @@ with tab1:
                 key="catalog_editor"
             )
            
-            # Edit logic (only first selected for simplicity)
             to_edit = edited_df[edited_df["Edit"] == True]["id"].tolist()
             if to_edit:
                 edit_id = to_edit[0]
@@ -212,7 +216,6 @@ with tab1:
                             st.cache_data.clear()
                             st.rerun()
            
-            # Delete logic
             to_delete = edited_df[edited_df["Delete"] == True]["id"].tolist()
             if to_delete:
                 st.warning(f"Selected {len(to_delete)} reagent(s) for deletion.")
@@ -237,7 +240,7 @@ with tab2:
    
     st.header("Add Reagent")
    
-    # Bulk Excel import
+    # Bulk Excel import (unchanged)
     st.subheader("Bulk Add from Excel")
     uploaded_excel = st.file_uploader("Upload Excel (.xlsx/.xls)", type=["xlsx", "xls"])
    
@@ -276,7 +279,7 @@ with tab2:
                         quantity = 1.0
                         unit = "bottles"
                         exp_date = None
-                        threshold = 1.0  # ← changed to 1.0
+                        threshold = 1.0
                        
                         c.execute("""INSERT INTO reagents
                                     (name, cas_number, supplier, location, quantity, unit, expiration_date, low_stock_threshold)
@@ -301,7 +304,7 @@ with tab2:
    
     st.markdown("---")
    
-    # Single entry form
+    # Single entry form (unchanged)
     if "add_form_key" not in st.session_state:
         st.session_state.add_form_key = 0
    
@@ -328,14 +331,13 @@ with tab2:
        
         exp_date = col2.date_input("Expiration Date", value=None)
        
-        today = date.today()
         if exp_date:
             if exp_date < today:
                 st.error(f"⚠️ Warning: Expiration date ({exp_date}) already passed! (Today: {today})")
             elif exp_date == today:
                 st.warning(f"⚠️ Note: Expires today ({exp_date}).")
        
-        threshold = col2.number_input("Low Stock Threshold", value=1.0, min_value=0.0, step=0.1)  # ← changed to 1.0
+        threshold = col2.number_input("Low Stock Threshold", value=1.0, min_value=0.0, step=0.1)
        
         submitted = st.form_submit_button("Add Reagent")
         if submitted:
@@ -357,11 +359,28 @@ with tab2:
                 st.cache_data.clear()
                 st.rerun()
 
-    # Photo OCR – disabled
+    # ── Photo OCR – now using pytesseract ──────────────────────────────────────
     st.subheader("Quick Entry via Photo (OCR)")
-    st.info("OCR feature is temporarily disabled (easyocr compatibility issues on hosted environments).")
+    photo = st.camera_input("Take photo of reagent label") or st.file_uploader("Or upload photo", type=["jpg", "png", "jpeg"])
+    
+    if photo:
+        st.image(photo, width=400)
+        with st.spinner("Extracting text with Tesseract OCR..."):
+            try:
+                img = Image.open(photo)
+                # Optional: improve accuracy for labels (grayscale + thresholding if needed)
+                # img = img.convert('L')  # grayscale
+                text = pytesseract.image_to_string(img).strip()
+                
+                if text:
+                    st.success("Text extracted successfully!")
+                    st.text_area("Extracted Text (copy to form fields above)", text, height=150)
+                else:
+                    st.warning("No text detected in the image. Try better lighting, straighter angle, or higher resolution.")
+            except Exception as e:
+                st.error(f"OCR failed: {str(e)}\n\nTip: Ensure Tesseract is installed on the host (via packages.txt on Streamlit Cloud).")
 
-# ── Log Reagent Usage ───────────────────────────────────────────────────────
+# ── Log Reagent Usage (unchanged) ───────────────────────────────────────────
 with tab3:
     st.header("Log Reagent Usage")
    
@@ -421,7 +440,7 @@ with tab3:
                     except Exception as e:
                         st.error(f"Error logging usage: {str(e)}")
 
-# ── QR Tools & Admin ────────────────────────────────────────────────────────
+# ── QR Tools & Admin (unchanged) ────────────────────────────────────────────
 with tab4:
     st.header("QR Code Tools")
     st.info("QR generation & scanning coming soon...")
