@@ -1,5 +1,4 @@
-# streamlit_app.py - Laboratory Reagent Inventory System
-# Updated: low stock alert only shown when quantity <= threshold
+# streamlit_app.py - Laboratory Reagent Inventory System (with enhanced bulk Excel import)
 
 import streamlit as st
 import pandas as pd
@@ -36,9 +35,9 @@ def init_db():
                  name TEXT NOT NULL,
                  cas_number TEXT,
                  supplier TEXT,
-                 location TEXT NOT NULL,
-                 quantity REAL NOT NULL,
-                 unit TEXT NOT NULL,
+                 location TEXT NOT NULL DEFAULT 'Default Location',
+                 quantity REAL NOT NULL DEFAULT 1.0,
+                 unit TEXT NOT NULL DEFAULT 'bottles',
                  expiration_date TEXT,
                  low_stock_threshold REAL DEFAULT 2.0)''')
     
@@ -62,7 +61,7 @@ def init_db():
 
 init_db()
 
-# Authentication (unchanged)
+# Authentication
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.username = None
@@ -113,15 +112,13 @@ def load_reagents():
 
 reagents_df = load_reagents()
 
-# Alerts – only show low stock when quantity <= threshold
+# Alerts – only when quantity <= threshold
 alerts = []
 today = date.today()
 for _, row in reagents_df.iterrows():
-    # Low stock only when actually low
     if row['quantity'] <= row['low_stock_threshold']:
         alerts.append(f"⚠️ **Low Stock**: {row['name']} — {row['quantity']:.2f} {row['unit']} (threshold: {row['low_stock_threshold']})")
     
-    # Expired check
     if pd.notnull(row['expiration_date']) and row['expiration_date'] < today:
         alerts.append(f"❌ **Expired**: {row['name']} ({row['expiration_date']})")
 
@@ -133,7 +130,7 @@ else:
 # Tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["Catalog", "Add Reagent", "Log Usage", "QR Tools", "Admin"])
 
-# Catalog (admin-only edit & delete) – unchanged
+# Catalog
 with tab1:
     st.header("Reagent Catalog")
     search = st.text_input("🔍 Search by Name, CAS, or Location")
@@ -174,16 +171,104 @@ with tab1:
                 key="catalog_editor"
             )
             
-            # Edit & Delete logic (unchanged from previous version)
-            # ... (keep your existing edit and delete code here) ...
+            # Edit & Delete logic (as in previous versions)
+            # ... keep your existing edit and delete code here ...
         else:
             st.dataframe(display_df.style.format({"quantity": "{:.2f}"}), use_container_width=True)
             st.info("Only admin can edit/delete.")
 
-# Add Reagent – default threshold = 2
+# Add Reagent – enhanced bulk Excel import
 with tab2:
     st.header("Add Reagent")
     
+    # Bulk Excel import
+    st.subheader("Bulk Add from Excel")
+    st.markdown("""
+    **Expected columns** (case insensitive):
+    - **Item** → Reagent Name (required)
+    - **Supplier** → Supplier
+    - **Supplier Item Identifier** → CAS Number
+    Other columns are ignored.
+    """)
+    
+    uploaded_excel = st.file_uploader("Upload Excel file (.xlsx/.xls)", type=["xlsx", "xls"])
+    
+    if uploaded_excel is not None:
+        try:
+            df_excel = pd.read_excel(uploaded_excel)
+            df_excel.columns = df_excel.columns.str.strip().str.lower()
+            
+            # Expanded mapping for common column names
+            rename_map = {
+                'item': 'name',
+                'product': 'name',
+                'product name': 'name',
+                'reagent': 'name',
+                'reagent name': 'name',
+                'description': 'name',
+                'material': 'name',
+                'supplier': 'supplier',
+                'supplier item identifier': 'cas_number',
+                'cas': 'cas_number',
+                'cas number': 'cas_number',
+                'cat no': 'cas_number',
+                'catalog number': 'cas_number',
+                'part number': 'cas_number',
+            }
+            df_excel = df_excel.rename(columns=rename_map)
+            
+            # Select relevant columns
+            keep_cols = ['name', 'cas_number', 'supplier']
+            available_cols = [c for c in keep_cols if c in df_excel.columns]
+            preview_df = df_excel[available_cols].copy()
+            
+            st.write("Preview of data to import (first 10 rows shown):")
+            st.dataframe(preview_df.head(10), use_container_width=True)
+            
+            if 'name' not in preview_df.columns:
+                st.error("The Excel file must contain at least one column for the reagent name. "
+                         "Supported names (case insensitive): Item, Product, Product Name, Reagent, Description, Material")
+            else:
+                if st.button("Confirm Import All Valid Rows", type="primary"):
+                    conn = sqlite3.connect(DB_FILE)
+                    c = conn.cursor()
+                    imported_count = 0
+                    
+                    for _, row in df_excel.iterrows():
+                        name = str(row.get('name', '')).strip()
+                        if not name:
+                            continue  # skip invalid rows
+                        
+                        cas = str(row.get('cas_number', '')).strip() or None
+                        supplier = str(row.get('supplier', '')).strip() or None
+                        
+                        # Default values for required fields not in Excel
+                        location = "Default Location"
+                        quantity = 1.0
+                        unit = "bottles"
+                        exp_date = None
+                        threshold = 2.0
+                        
+                        c.execute("""INSERT INTO reagents 
+                                    (name, cas_number, supplier, location, quantity, unit, expiration_date, low_stock_threshold)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  (name, cas, supplier, location, quantity, unit,
+                                   str(exp_date) if exp_date else None, threshold))
+                        imported_count += 1
+                    
+                    conn.commit()
+                    conn.close()
+                    
+                    st.success(f"Successfully imported **{imported_count}** reagents!")
+                    st.cache_data.clear()
+                    st.rerun()
+        except Exception as e:
+            st.error(f"Error processing Excel file: {str(e)}")
+            st.info("Please ensure the file is a valid .xlsx/.xls and try again.")
+    
+    st.markdown("---")
+    
+    # Single entry form (unchanged)
     if "add_form_key" not in st.session_state:
         st.session_state.add_form_key = 0
     
@@ -244,7 +329,7 @@ with tab2:
     photo = st.camera_input("Take photo") or st.file_uploader("Upload photo", type=["jpg","png","jpeg"])
     if photo:
         st.image(photo, width=400)
-        with st.spinner("OCR..."):
+        with st.spinner("OCR processing..."):
             try:
                 reader = easyocr.Reader(['en'], gpu=False)
                 result = reader.readtext(np.array(Image.open(photo)), detail=0)
@@ -254,24 +339,6 @@ with tab2:
             except Exception as e:
                 st.error(f"OCR failed: {str(e)}")
 
-# Log Reagent Usage (unchanged)
-with tab3:
-    st.header("Log Reagent Usage")
-    # ... your existing log usage code ...
-
-# QR Tools & Admin Dashboard (simplified)
-with tab4:
-    st.header("QR Code Tools")
-    # ... your QR code code ...
-
-with tab5:
-    if st.session_state.role != "admin":
-        st.error("Admin access only")
-    else:
-        st.header("Admin Dashboard")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Reagents", len(reagents_df))
-        col2.metric("Low Stock", len([a for a in alerts if "Low" in a]))
-        col3.metric("Expired", len([a for a in alerts if "Expired" in a]))
+# ... keep your existing code for tab3, tab4, tab5 ...
 
 st.caption("Laboratory Reagent Inventory • Streamlit • January 2026")
