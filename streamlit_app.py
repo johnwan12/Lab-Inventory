@@ -1,5 +1,5 @@
-# streamlit_app.py - Laboratory Reagent Inventory System (2026 - fully fixed)
-# Features: bulk Excel import, photo OCR, admin edit/delete, exp date warning, location dropdown+custom
+# streamlit_app.py - Laboratory Reagent Inventory System (2026 - stable version)
+# Features: bulk Excel import (Item→name), photo OCR, admin edit/delete, exp warning, location dropdown+custom
 
 import streamlit as st
 import pandas as pd
@@ -21,7 +21,6 @@ st.title("🧪 Laboratory Reagent Inventory System")
 
 DB_FILE = "reagents.db"
 
-# ── Database Init ───────────────────────────────────────────────────────────
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -63,7 +62,7 @@ def init_db():
 
 init_db()
 
-# ── Authentication ──────────────────────────────────────────────────────────
+# Authentication
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.username = None
@@ -99,7 +98,7 @@ if st.sidebar.button("🚪 Logout"):
 
 st.sidebar.success(f"Logged in as **{st.session_state.username}** ({st.session_state.role})")
 
-# ── Load Reagents ───────────────────────────────────────────────────────────
+# Load Reagents
 @st.cache_data(ttl=30)
 def load_reagents():
     try:
@@ -114,7 +113,7 @@ def load_reagents():
 
 reagents_df = load_reagents()
 
-# ── Alerts ──────────────────────────────────────────────────────────────────
+# Alerts
 alerts = []
 today = date.today()
 for _, row in reagents_df.iterrows():
@@ -126,10 +125,10 @@ for _, row in reagents_df.iterrows():
 if alerts:
     st.warning("\n\n".join(alerts))
 
-# ── Tabs ────────────────────────────────────────────────────────────────────
+# Tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["Catalog", "Add Reagent", "Log Usage", "QR Tools", "Admin"])
 
-# Catalog – admin only edit & delete
+# Catalog - admin only edit & delete
 with tab1:
     st.header("Reagent Catalog")
     search = st.text_input("🔍 Search by Name, CAS, or Location")
@@ -143,7 +142,7 @@ with tab1:
         ]
 
     if display_df.empty:
-        st.info("No reagents found.")
+        st.info("No reagents found. Add some via 'Add Reagent' tab.")
     else:
         if st.session_state.role == "admin":
             editable_df = display_df.copy()
@@ -170,7 +169,7 @@ with tab1:
                 key="catalog_editor"
             )
             
-            # Edit logic
+            # Edit
             to_edit = edited_df[edited_df["Edit"] == True]["id"].tolist()
             if to_edit:
                 edit_id = to_edit[0]
@@ -189,7 +188,7 @@ with tab1:
                     if st.button("Save Changes", type="primary"):
                         today = date.today()
                         if e_exp and e_exp < today:
-                            st.error(f"Cannot save: Expiration date is in the past (today: {today}).")
+                            st.error(f"Cannot save: Expiration date is in the past.")
                         else:
                             conn = sqlite3.connect(DB_FILE)
                             c = conn.cursor()
@@ -201,15 +200,15 @@ with tab1:
                                        e_quantity, e_unit, str(e_exp) if e_exp else None, e_threshold, edit_id))
                             conn.commit()
                             conn.close()
-                            st.success("Reagent updated!")
+                            st.success("Updated!")
                             st.cache_data.clear()
                             st.rerun()
             
-            # Delete logic
+            # Delete
             to_delete = edited_df[edited_df["Delete"] == True]["id"].tolist()
             if to_delete:
-                st.warning(f"Selected {len(to_delete)} reagent(s) for deletion.")
-                if st.button("🗑️ Confirm Delete Selected", type="primary"):
+                st.warning(f"Selected {len(to_delete)} item(s) for deletion.")
+                if st.button("🗑️ Confirm Delete", type="primary"):
                     conn = sqlite3.connect(DB_FILE)
                     c = conn.cursor()
                     for rid in to_delete:
@@ -221,14 +220,16 @@ with tab1:
                     st.rerun()
         else:
             st.dataframe(display_df.style.format({"quantity": "{:.2f}"}), use_container_width=True)
-            st.info("Only admin users can edit or delete reagents.")
+            st.info("Only admin can edit/delete reagents.")
 
-# Add Reagent – bulk Excel + single + photo OCR
+# Add Reagent - bulk Excel + single + OCR
 with tab2:
     st.header("Add Reagent")
     
     # Bulk Excel import
     st.subheader("Bulk Add from Excel")
+    st.info("Excel columns: Item → Name, Supplier → Supplier, Supplier Item Identifier → CAS Number")
+    
     uploaded_excel = st.file_uploader("Upload Excel (.xlsx/.xls)", type=["xlsx", "xls"])
     
     if uploaded_excel is not None:
@@ -238,7 +239,12 @@ with tab2:
             
             rename_map = {
                 'item': 'name',
+                'product': 'name',
+                'product name': 'name',
+                'description': 'name',
                 'supplier item identifier': 'cas_number',
+                'cat no': 'cas_number',
+                'catalog number': 'cas_number',
             }
             df_excel = df_excel.rename(columns=rename_map)
             
@@ -246,11 +252,11 @@ with tab2:
             available_cols = [c for c in keep_cols if c in df_excel.columns]
             preview_df = df_excel[available_cols].copy()
             
-            st.write("Preview of data to import (first 10 rows):")
+            st.write("Preview (first 10 rows):")
             st.dataframe(preview_df.head(10), use_container_width=True)
             
             if 'name' not in preview_df.columns:
-                st.error("Excel must contain a column named 'Item' (case insensitive).")
+                st.error("Excel must contain a column named 'Item', 'Product', 'Product Name', or 'Description' (case insensitive).")
             else:
                 if st.button("Confirm Import All Valid Rows", type="primary"):
                     conn = sqlite3.connect(DB_FILE)
@@ -265,8 +271,7 @@ with tab2:
                         cas = str(row.get('cas_number', '')).strip() or None
                         supplier = str(row.get('supplier', '')).strip() or None
                         
-                        # Defaults for missing fields
-                        location = "Default Location"  # ← you can change this
+                        location = "Default Location"
                         quantity = 1.0
                         unit = "bottles"
                         exp_date = None
@@ -361,7 +366,7 @@ with tab2:
             except Exception as e:
                 st.error(f"OCR failed: {str(e)}")
 
-# Log Reagent Usage – fixed & reliable
+# Log Reagent Usage
 with tab3:
     st.header("Log Reagent Usage")
     
@@ -421,11 +426,31 @@ with tab3:
                     except Exception as e:
                         st.error(f"Error logging usage: {str(e)}")
 
-# QR Tools & Admin Dashboard (simplified – add your full code if needed)
+# QR Tools
 with tab4:
     st.header("QR Code Tools")
-    st.info("QR generation code here...")
+    if reagents_df.empty:
+        st.info("Add reagents first.")
+    else:
+        selected_id = st.selectbox("Select Reagent", reagents_df['id'],
+                                  format_func=lambda x: reagents_df[reagents_df['id']==x]['name'].values[0])
+        row = reagents_df[reagents_df['id'] == selected_id].iloc[0]
+        
+        app_url = st.text_input("App URL", "https://your-app.streamlit.app")
+        qr_data = f"{app_url}?reagent_id={selected_id}"
+        
+        qr = qrcode.QRCode(version=1, error_correction=qrcode.ERROR_CORRECT_L, box_size=3, border=2)
+        qr.add_data(qr_data)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = BytesIO()
+        img.save(buf, "PNG")
+        byte_im = buf.getvalue()
+        
+        st.image(byte_im)
+        st.download_button("Download QR", byte_im, f"QR_{row['name']}_{selected_id}.png", "image/png")
 
+# Admin Dashboard
 with tab5:
     if st.session_state.role != "admin":
         st.error("Admin access only")
