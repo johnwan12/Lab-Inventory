@@ -1,23 +1,18 @@
 # streamlit_app.py - Laboratory Reagent Inventory System (2026 - updated with pytesseract OCR)
-# Features: bulk Excel import, photo OCR (now using pytesseract), admin edit/delete, exp date warning, location dropdown+custom
+# Features: bulk Excel import, photo OCR (pytesseract), admin edit/delete, exp date warning, location dropdown+custom
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime
 import hashlib
 from PIL import Image
-import pytesseract  # For OCR - requires Tesseract installed on system/host
+import pytesseract
 try:
     import pysqlite3 as sqlite3
 except ImportError:
     import sqlite3
 
-# Note for deployment on Streamlit Cloud:
-# 1. Add to repo root: packages.txt with:
-#    tesseract-ocr
-#    tesseract-ocr-eng
-# 2. Add to requirements.txt:
-#    pytesseract
-#    pillow
+# For Streamlit Cloud: set Tesseract path explicitly (installed to /usr/bin/tesseract)
+pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
 
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
@@ -141,7 +136,7 @@ active_index = tab_names.index(st.session_state.active_tab) if st.session_state.
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(tab_names)
 
-# ── Catalog (unchanged) ─────────────────────────────────────────────────────
+# ── Catalog ─────────────────────────────────────────────────────────────────
 with tab1:
     st.header("Reagent Catalog")
     search = st.text_input("🔍 Search by Name, CAS, or Location")
@@ -240,7 +235,7 @@ with tab2:
    
     st.header("Add Reagent")
    
-    # Bulk Excel import (unchanged)
+    # Bulk Excel import
     st.subheader("Bulk Add from Excel")
     uploaded_excel = st.file_uploader("Upload Excel (.xlsx/.xls)", type=["xlsx", "xls"])
    
@@ -304,7 +299,7 @@ with tab2:
    
     st.markdown("---")
    
-    # Single entry form (unchanged)
+    # Single entry form
     if "add_form_key" not in st.session_state:
         st.session_state.add_form_key = 0
    
@@ -359,7 +354,7 @@ with tab2:
                 st.cache_data.clear()
                 st.rerun()
 
-    # ── Photo OCR – now using pytesseract ──────────────────────────────────────
+    # ── Photo OCR with pytesseract ─────────────────────────────────────────────
     st.subheader("Quick Entry via Photo (OCR)")
     photo = st.camera_input("Take photo of reagent label") or st.file_uploader("Or upload photo", type=["jpg", "png", "jpeg"])
     
@@ -368,19 +363,19 @@ with tab2:
         with st.spinner("Extracting text with Tesseract OCR..."):
             try:
                 img = Image.open(photo)
-                # Optional: improve accuracy for labels (grayscale + thresholding if needed)
-                # img = img.convert('L')  # grayscale
+                # Optional preprocessing for better accuracy on labels
+                # img = img.convert('L')  # grayscale - uncomment if needed
                 text = pytesseract.image_to_string(img).strip()
                 
                 if text:
-                    st.success("Text extracted successfully!")
-                    st.text_area("Extracted Text (copy to form fields above)", text, height=150)
+                    st.success("Text extracted!")
+                    st.text_area("Extracted Text – copy to form fields above", text, height=150)
                 else:
-                    st.warning("No text detected in the image. Try better lighting, straighter angle, or higher resolution.")
+                    st.warning("No text detected. Try clearer image, better lighting, or straighter angle.")
             except Exception as e:
-                st.error(f"OCR failed: {str(e)}\n\nTip: Ensure Tesseract is installed on the host (via packages.txt on Streamlit Cloud).")
+                st.error(f"OCR failed: {str(e)}\n\nCheck deployment: Tesseract must be installed via packages.txt on Streamlit Cloud.")
 
-# ── Log Reagent Usage (unchanged) ───────────────────────────────────────────
+# ── Log Reagent Usage ───────────────────────────────────────────────────────
 with tab3:
     st.header("Log Reagent Usage")
    
@@ -440,7 +435,7 @@ with tab3:
                     except Exception as e:
                         st.error(f"Error logging usage: {str(e)}")
 
-# ── QR Tools & Admin (unchanged) ────────────────────────────────────────────
+# ── QR Tools & Admin ────────────────────────────────────────────────────────
 with tab4:
     st.header("QR Code Tools")
     st.info("QR generation & scanning coming soon...")
