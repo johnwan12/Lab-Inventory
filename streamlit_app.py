@@ -1,5 +1,6 @@
 # streamlit_app.py - Laboratory Reagent Inventory System (2026 - updated)
-# Features: bulk Excel import, photo OCR (pytesseract with fallback), admin edit/delete, exp date warning, improved location with custom input
+# Features: bulk Excel import, photo OCR (pytesseract with fallback), admin edit/delete, 
+#           exp date warning, location with dynamic custom input field
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime
@@ -7,6 +8,7 @@ import hashlib
 from PIL import Image
 import os
 from pathlib import Path
+
 try:
     import pytesseract
 except ImportError:
@@ -17,7 +19,7 @@ try:
 except ImportError:
     import sqlite3
 
-# For Streamlit Cloud
+# For Streamlit Cloud deployment
 TESSERACT_PATH = '/usr/bin/tesseract'
 if pytesseract:
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
@@ -27,17 +29,16 @@ st.title("🧪 Laboratory Reagent Inventory System")
 
 DB_FILE = "reagents.db"
 
-# ── Database Init ───────────────────────────────────────────────────────────
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-   
+    
     c.execute('''CREATE TABLE IF NOT EXISTS users (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
                  username TEXT UNIQUE NOT NULL,
                  password_hash TEXT NOT NULL,
                  role TEXT NOT NULL)''')
-   
+    
     c.execute('''CREATE TABLE IF NOT EXISTS reagents (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
                  name TEXT NOT NULL,
@@ -48,7 +49,7 @@ def init_db():
                  unit TEXT NOT NULL,
                  expiration_date TEXT,
                  low_stock_threshold REAL DEFAULT 1.0)''')
-   
+    
     c.execute('''CREATE TABLE IF NOT EXISTS usage_logs (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
                  reagent_id INTEGER,
@@ -56,14 +57,14 @@ def init_db():
                  quantity_used REAL,
                  timestamp TEXT,
                  notes TEXT)''')
-   
+    
     hashed_admin = hashlib.sha256("admin123".encode()).hexdigest()
     hashed_user = hashlib.sha256("user123".encode()).hexdigest()
     c.execute("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
               ("admin", hashed_admin, "admin"))
     c.execute("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
               ("user", hashed_user, "user"))
-   
+    
     conn.commit()
     conn.close()
 
@@ -236,13 +237,14 @@ with tab1:
             st.dataframe(display_df.style.format({"quantity": "{:.2f}"}), use_container_width=True)
             st.info("Only admin users can edit or delete reagents.")
 
-# ── Add Reagent (updated location handling) ─────────────────────────────────
+# ── Add Reagent ─────────────────────────────────────────────────────────────
 with tab2:
     if "bulk_last_import" in st.session_state:
         st.caption(st.session_state.bulk_last_import)
    
     st.header("Add Reagent")
    
+    # Bulk Excel import
     st.subheader("Bulk Add from Excel")
     uploaded_excel = st.file_uploader("Upload Excel (.xlsx/.xls)", type=["xlsx", "xls"])
    
@@ -306,30 +308,31 @@ with tab2:
    
     st.markdown("---")
    
-    # Single entry form with improved location
+    # ── Single entry form with dynamic custom location ───────────────────────
     if "add_form_key" not in st.session_state:
         st.session_state.add_form_key = 0
    
     with st.form(key=f"add_form_{st.session_state.add_form_key}"):
         col1, col2 = st.columns(2)
        
-        name = col1.text_input("Name*", help="Required field")
+        name = col1.text_input("Name*", help="Required")
         cas = col1.text_input("CAS Number")
         supplier = col2.text_input("Supplier")
        
-        # ── Location with custom input ────────────────────────────────
         location_preset = col2.selectbox(
             "Location*",
             options=["Scrappy-Doo", "Daphne", "Tom", "Jerry", "Scooby-Doo", "Velma", "Custom input"],
-            help="Choose a predefined location or select 'Custom input' to type your own"
+            help="Select a preset or choose 'Custom input' to enter your own location"
         )
        
+        # Custom location field appears only when "Custom input" is selected
         custom_location = ""
         if location_preset == "Custom input":
             custom_location = col2.text_input(
-                "Custom location",
+                "Custom location*",
+                value="",
                 placeholder="e.g., Cabinet B - Shelf 4, Freezer -80°C, Cold Room 4°C",
-                help="This value will be saved exactly as you type it"
+                help="This field is required when 'Custom input' is selected"
             )
        
         final_location = custom_location.strip() if location_preset == "Custom input" else location_preset
@@ -355,7 +358,7 @@ with tab2:
                 errors.append("Name is required.")
             if not final_location:
                 if location_preset == "Custom input":
-                    errors.append("Custom location cannot be blank when 'Custom input' is selected.")
+                    errors.append("Custom location cannot be empty when 'Custom input' is selected.")
                 else:
                     errors.append("Location is required.")
            
@@ -378,7 +381,7 @@ with tab2:
                 st.cache_data.clear()
                 st.rerun()
 
-    # OCR section (with debug/fallback - unchanged from previous)
+    # OCR section (with debug/fallback)
     st.subheader("Quick Entry via Photo (OCR)")
     photo = st.camera_input("Take photo of reagent label") or st.file_uploader("Or upload photo", type=["jpg", "png", "jpeg"])
     
@@ -389,11 +392,11 @@ with tab2:
             st.error("pytesseract package not installed – check requirements.txt")
         elif not Path(TESSERACT_PATH).exists():
             st.error(f"Tesseract binary not found at {TESSERACT_PATH}.\n\n"
-                     "**Deployment fix steps:**\n"
-                     "1. Add packages.txt in repo root with:\n"
+                     "**Deployment fix:**\n"
+                     "1. Add packages.txt in repo root:\n"
                      "   tesseract-ocr\n   tesseract-ocr-eng\n"
                      "2. Reboot app or delete & recreate deployment\n"
-                     "3. Check build logs in Manage app for apt-get success")
+                     "3. Check build logs for apt-get success")
         else:
             with st.spinner("Extracting text with Tesseract OCR..."):
                 try:
