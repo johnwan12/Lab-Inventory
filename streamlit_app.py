@@ -1,5 +1,5 @@
-# streamlit_app.py - Laboratory Reagent Inventory System (2026 - updated with pytesseract OCR fallback)
-# Features: bulk Excel import, photo OCR (pytesseract with debug/fallback), admin edit/delete, exp date warning, location dropdown+custom
+# streamlit_app.py - Laboratory Reagent Inventory System (2026 - updated)
+# Features: bulk Excel import, photo OCR (pytesseract with fallback), admin edit/delete, exp date warning, improved location with custom input
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime
@@ -10,16 +10,17 @@ from pathlib import Path
 try:
     import pytesseract
 except ImportError:
-    pytesseract = None  # fallback if package missing
+    pytesseract = None
 
 try:
     import pysqlite3 as sqlite3
 except ImportError:
     import sqlite3
 
-# For Streamlit Cloud: set Tesseract path explicitly
+# For Streamlit Cloud
 TESSERACT_PATH = '/usr/bin/tesseract'
-pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH if pytesseract else ''
+if pytesseract:
+    pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
 
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
@@ -143,7 +144,7 @@ active_index = tab_names.index(st.session_state.active_tab) if st.session_state.
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(tab_names)
 
-# ── Catalog ─────────────────────────────────────────────────────────────────
+# ── Catalog (unchanged) ─────────────────────────────────────────────────────
 with tab1:
     st.header("Reagent Catalog")
     search = st.text_input("🔍 Search by Name, CAS, or Location")
@@ -235,7 +236,7 @@ with tab1:
             st.dataframe(display_df.style.format({"quantity": "{:.2f}"}), use_container_width=True)
             st.info("Only admin users can edit or delete reagents.")
 
-# ── Add Reagent ─────────────────────────────────────────────────────────────
+# ── Add Reagent (updated location handling) ─────────────────────────────────
 with tab2:
     if "bulk_last_import" in st.session_state:
         st.caption(st.session_state.bulk_last_import)
@@ -305,24 +306,31 @@ with tab2:
    
     st.markdown("---")
    
+    # Single entry form with improved location
     if "add_form_key" not in st.session_state:
         st.session_state.add_form_key = 0
    
     with st.form(key=f"add_form_{st.session_state.add_form_key}"):
         col1, col2 = st.columns(2)
        
-        name = col1.text_input("Name*", help="Required")
+        name = col1.text_input("Name*", help="Required field")
         cas = col1.text_input("CAS Number")
         supplier = col2.text_input("Supplier")
        
+        # ── Location with custom input ────────────────────────────────
         location_preset = col2.selectbox(
             "Location*",
-            options=["Scrappy-Doo", "Daphne", "Tom", "Jerry", "Scooby-Doo", "Velma", "Custom input"]
+            options=["Scrappy-Doo", "Daphne", "Tom", "Jerry", "Scooby-Doo", "Velma", "Custom input"],
+            help="Choose a predefined location or select 'Custom input' to type your own"
         )
        
         custom_location = ""
         if location_preset == "Custom input":
-            custom_location = col2.text_input("Custom Location", placeholder="e.g., Cabinet B - Shelf 4")
+            custom_location = col2.text_input(
+                "Custom location",
+                placeholder="e.g., Cabinet B - Shelf 4, Freezer -80°C, Cold Room 4°C",
+                help="This value will be saved exactly as you type it"
+            )
        
         final_location = custom_location.strip() if location_preset == "Custom input" else location_preset
        
@@ -339,43 +347,53 @@ with tab2:
        
         threshold = col2.number_input("Low Stock Threshold", value=1.0, min_value=0.0, step=0.1)
        
-        submitted = st.form_submit_button("Add Reagent")
+        submitted = st.form_submit_button("Add Reagent", type="primary")
+       
         if submitted:
-            if not name.strip() or not final_location:
-                st.error("Name and Location are required!")
+            errors = []
+            if not name.strip():
+                errors.append("Name is required.")
+            if not final_location:
+                if location_preset == "Custom input":
+                    errors.append("Custom location cannot be blank when 'Custom input' is selected.")
+                else:
+                    errors.append("Location is required.")
+           
+            if errors:
+                for err in errors:
+                    st.error(err)
             else:
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
                 c.execute("""INSERT INTO reagents
                             (name, cas_number, supplier, location, quantity, unit, expiration_date, low_stock_threshold)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                          (name, cas or None, supplier or None, final_location, quantity, unit,
-                           str(exp_date) if exp_date else None, threshold))
+                          (name.strip(), cas or None, supplier or None, final_location,
+                           quantity, unit, str(exp_date) if exp_date else None, threshold))
                 conn.commit()
                 conn.close()
                
-                st.success(f"Added '{name}' successfully!")
+                st.success(f"Added **{name.strip()}** at **{final_location}** successfully!")
                 st.session_state.add_form_key += 1
                 st.cache_data.clear()
                 st.rerun()
 
-    # ── Photo OCR with fallback/debug ────────────────────────────────────────
+    # OCR section (with debug/fallback - unchanged from previous)
     st.subheader("Quick Entry via Photo (OCR)")
     photo = st.camera_input("Take photo of reagent label") or st.file_uploader("Or upload photo", type=["jpg", "png", "jpeg"])
     
     if photo:
         st.image(photo, width=400)
         
-        # Debug Tesseract availability
         if not pytesseract:
             st.error("pytesseract package not installed – check requirements.txt")
         elif not Path(TESSERACT_PATH).exists():
-            st.error(f"Tesseract binary not found at {TESSERACT_PATH}. "
-                     "Deployment fix needed:\n\n"
-                     "1. Ensure packages.txt exists in repo root with:\n"
-                     "   tesseract-ocr\n   tesseract-ocr-eng\n\n"
-                     "2. Reboot app or delete/re-create deployment.\n"
-                     "3. Check build logs in Manage app for apt-get success.")
+            st.error(f"Tesseract binary not found at {TESSERACT_PATH}.\n\n"
+                     "**Deployment fix steps:**\n"
+                     "1. Add packages.txt in repo root with:\n"
+                     "   tesseract-ocr\n   tesseract-ocr-eng\n"
+                     "2. Reboot app or delete & recreate deployment\n"
+                     "3. Check build logs in Manage app for apt-get success")
         else:
             with st.spinner("Extracting text with Tesseract OCR..."):
                 try:
@@ -386,7 +404,7 @@ with tab2:
                         st.success("Text extracted!")
                         st.text_area("Extracted Text – copy to form fields above", text, height=150)
                     else:
-                        st.warning("No text detected. Try clearer image, better lighting, straighter angle, or higher contrast.")
+                        st.warning("No text detected. Try better lighting, straighter angle, or higher resolution.")
                 except Exception as e:
                     st.error(f"OCR processing failed: {str(e)}")
 
