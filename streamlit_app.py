@@ -1,18 +1,25 @@
-# streamlit_app.py - Laboratory Reagent Inventory System (2026 - updated with pytesseract OCR)
-# Features: bulk Excel import, photo OCR (pytesseract), admin edit/delete, exp date warning, location dropdown+custom
+# streamlit_app.py - Laboratory Reagent Inventory System (2026 - updated with pytesseract OCR fallback)
+# Features: bulk Excel import, photo OCR (pytesseract with debug/fallback), admin edit/delete, exp date warning, location dropdown+custom
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime
 import hashlib
 from PIL import Image
-import pytesseract
+import os
+from pathlib import Path
+try:
+    import pytesseract
+except ImportError:
+    pytesseract = None  # fallback if package missing
+
 try:
     import pysqlite3 as sqlite3
 except ImportError:
     import sqlite3
 
-# For Streamlit Cloud: set Tesseract path explicitly (installed to /usr/bin/tesseract)
-pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+# For Streamlit Cloud: set Tesseract path explicitly
+TESSERACT_PATH = '/usr/bin/tesseract'
+pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH if pytesseract else ''
 
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
@@ -235,7 +242,6 @@ with tab2:
    
     st.header("Add Reagent")
    
-    # Bulk Excel import
     st.subheader("Bulk Add from Excel")
     uploaded_excel = st.file_uploader("Upload Excel (.xlsx/.xls)", type=["xlsx", "xls"])
    
@@ -299,7 +305,6 @@ with tab2:
    
     st.markdown("---")
    
-    # Single entry form
     if "add_form_key" not in st.session_state:
         st.session_state.add_form_key = 0
    
@@ -354,26 +359,36 @@ with tab2:
                 st.cache_data.clear()
                 st.rerun()
 
-    # ── Photo OCR with pytesseract ─────────────────────────────────────────────
+    # ── Photo OCR with fallback/debug ────────────────────────────────────────
     st.subheader("Quick Entry via Photo (OCR)")
     photo = st.camera_input("Take photo of reagent label") or st.file_uploader("Or upload photo", type=["jpg", "png", "jpeg"])
     
     if photo:
         st.image(photo, width=400)
-        with st.spinner("Extracting text with Tesseract OCR..."):
-            try:
-                img = Image.open(photo)
-                # Optional preprocessing for better accuracy on labels
-                # img = img.convert('L')  # grayscale - uncomment if needed
-                text = pytesseract.image_to_string(img).strip()
-                
-                if text:
-                    st.success("Text extracted!")
-                    st.text_area("Extracted Text – copy to form fields above", text, height=150)
-                else:
-                    st.warning("No text detected. Try clearer image, better lighting, or straighter angle.")
-            except Exception as e:
-                st.error(f"OCR failed: {str(e)}\n\nCheck deployment: Tesseract must be installed via packages.txt on Streamlit Cloud.")
+        
+        # Debug Tesseract availability
+        if not pytesseract:
+            st.error("pytesseract package not installed – check requirements.txt")
+        elif not Path(TESSERACT_PATH).exists():
+            st.error(f"Tesseract binary not found at {TESSERACT_PATH}. "
+                     "Deployment fix needed:\n\n"
+                     "1. Ensure packages.txt exists in repo root with:\n"
+                     "   tesseract-ocr\n   tesseract-ocr-eng\n\n"
+                     "2. Reboot app or delete/re-create deployment.\n"
+                     "3. Check build logs in Manage app for apt-get success.")
+        else:
+            with st.spinner("Extracting text with Tesseract OCR..."):
+                try:
+                    img = Image.open(photo)
+                    text = pytesseract.image_to_string(img).strip()
+                    
+                    if text:
+                        st.success("Text extracted!")
+                        st.text_area("Extracted Text – copy to form fields above", text, height=150)
+                    else:
+                        st.warning("No text detected. Try clearer image, better lighting, straighter angle, or higher contrast.")
+                except Exception as e:
+                    st.error(f"OCR processing failed: {str(e)}")
 
 # ── Log Reagent Usage ───────────────────────────────────────────────────────
 with tab3:
