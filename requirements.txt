@@ -6,3 +6,4 @@ easyocr
 torch
 Pillow
 numpy
+openpyxl          # ← for reading .xlsx files
