@@ -1,5 +1,5 @@
 # streamlit_app.py - Laboratory Reagent Inventory System (Google Sheets version)
-# Updated January 2026 - fixed syntax error in OCR section
+# Updated: workaround for "Spreadsheet must be specified" error
 
 import streamlit as st
 import pandas as pd
@@ -19,14 +19,13 @@ from streamlit_gsheets import GSheetsConnection
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System (Google Sheets)")
 
-WORKSHEET_NAME = "template"  # Change only if your tab name is different
-
 def get_gsheet_conn():
-    try:
-        return st.connection("lab_gsheets", type=GSheetsConnection)
-    except Exception as e:
-        st.error(f"Failed to connect to Google Sheet: {str(e)}")
-        st.stop()
+    return st.connection(
+        "lab_gsheets",
+        type=GSheetsConnection,
+        spreadsheet="https://docs.google.com/spreadsheets/d/1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ/edit",
+        worksheet="template"
+    )
 
 # ── Authentication (hardcoded for now) ──────────────────────────────────────
 if "authenticated" not in st.session_state:
@@ -72,7 +71,6 @@ def load_reagents():
     conn = get_gsheet_conn()
     try:
         df = conn.read(
-            worksheet=WORKSHEET_NAME,
             usecols=[
                 "id", "name", "cas_number", "supplier", "location",
                 "quantity", "unit", "expiration_date", "low_stock_threshold"
@@ -181,12 +179,12 @@ with tab1:
                             st.error("Cannot save: Expiration date is in the past.")
                         else:
                             conn = get_gsheet_conn()
-                            df = conn.read(worksheet=WORKSHEET_NAME)
+                            df = conn.read()
                             mask = df['id'] == edit_id
                             if not mask.any():
                                 st.error("Reagent not found in sheet.")
                             else:
-                                row_idx = df.index[mask][0] + 2  # header + 0-based
+                                row_idx = df.index[mask][0] + 2
                                 updates = {
                                     "name": e_name,
                                     "cas_number": e_cas,
@@ -200,7 +198,6 @@ with tab1:
                                 for col_name, value in updates.items():
                                     col_idx = df.columns.get_loc(col_name) + 1
                                     conn.update(
-                                        worksheet=WORKSHEET_NAME,
                                         range=f"{chr(64 + col_idx)}{row_idx}",
                                         values=[[value]]
                                     )
@@ -213,9 +210,9 @@ with tab1:
                 st.warning(f"Selected {len(to_delete)} reagent(s) for deletion.")
                 if st.button("🗑️ Confirm Delete Selected", type="primary"):
                     conn = get_gsheet_conn()
-                    df = conn.read(worksheet=WORKSHEET_NAME)
+                    df = conn.read()
                     updated_df = df[~df['id'].isin(to_delete)]
-                    conn.update(worksheet=WORKSHEET_NAME, data=updated_df.to_dict('records'))
+                    conn.update(data=updated_df.to_dict('records'))
                     st.success(f"Deleted {len(to_delete)} reagent(s)!")
                     st.cache_data.clear()
                     st.rerun()
@@ -227,7 +224,7 @@ with tab1:
 with tab2:
     st.header("Add Reagent")
 
-    # Bulk import
+    # Bulk import (simplified)
     st.subheader("Bulk Add from Excel")
     uploaded = st.file_uploader("Upload Excel (.xlsx/.xls)", type=["xlsx", "xls"])
 
@@ -242,15 +239,13 @@ with tab2:
             else:
                 if st.button("Confirm Import", type="primary"):
                     conn = get_gsheet_conn()
-                    current = conn.read(worksheet=WORKSHEET_NAME)
+                    current = conn.read()
                     max_id = current['id'].max() if not current.empty else 0
 
                     new_rows = []
-                    imported = 0
                     for _, r in df_excel.iterrows():
                         name = str(r.get('name', '')).strip()
-                        if not name:
-                            continue
+                        if not name: continue
                         max_id += 1
                         new_rows.append({
                             "id": max_id,
@@ -263,13 +258,12 @@ with tab2:
                             "expiration_date": "",
                             "low_stock_threshold": 1.0
                         })
-                        imported += 1
 
                     if new_rows:
                         new_df = pd.DataFrame(new_rows)
                         final_df = pd.concat([current, new_df], ignore_index=True)
-                        conn.update(worksheet=WORKSHEET_NAME, data=final_df.to_dict('records'))
-                        st.success(f"Imported {imported} reagents.")
+                        conn.update(data=final_df.to_dict('records'))
+                        st.success(f"Imported {len(new_rows)} reagents.")
                         st.cache_data.clear()
                         st.rerun()
         except Exception as e:
@@ -277,7 +271,7 @@ with tab2:
 
     st.markdown("---")
 
-    # Single add form
+    # Single entry form
     with st.form("add_reagent_form"):
         col1, col2 = st.columns(2)
         name = col1.text_input("Name*", help="Required")
@@ -300,7 +294,7 @@ with tab2:
                 st.error("Location is required.")
             else:
                 conn = get_gsheet_conn()
-                df = conn.read(worksheet=WORKSHEET_NAME)
+                df = conn.read()
                 max_id = df['id'].max() if not df.empty else 0
                 new_id = max_id + 1
 
@@ -317,12 +311,12 @@ with tab2:
                 }
 
                 updated = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                conn.update(worksheet=WORKSHEET_NAME, data=updated.to_dict('records'))
+                conn.update(data=updated.to_dict('records'))
                 st.success(f"Added **{name.strip()}** (ID: {new_id})")
                 st.cache_data.clear()
                 st.rerun()
 
-    # OCR Section ────────────────────────────────────────────────────────────
+    # OCR Section
     st.subheader("Quick Entry via Photo (OCR)")
     photo = st.camera_input("Take photo of reagent label") or st.file_uploader("Or upload photo", type=["jpg", "png", "jpeg"])
 
@@ -337,7 +331,7 @@ with tab2:
                     img = Image.open(photo)
                     text = pytesseract.image_to_string(img).strip()
                     
-                    if text:  # ← FIXED: added missing colon here
+                    if text:
                         st.success("Text extracted!")
                         st.text_area("Extracted Text – copy to form fields above", text, height=150)
                     else:
@@ -357,7 +351,7 @@ with tab3:
         else:
             options = usable['id'].tolist()
             labels = [f"{r['name']} (ID: {r['id']}) – {r['quantity']:.2f} {r['unit']} left" for _, r in usable.iterrows()]
-            selected_id = st.selectbox("Select Reagent", options=options, format_func=lambda x: next(l for i,l in zip(options,labels) if i==x))
+            selected_id = st.selectbox("Select Reagent", options=options, format_func=lambda x: next((l for i,l in zip(options,labels) if i==x), str(x)))
 
             if selected_id:
                 row = usable[usable['id'] == selected_id].iloc[0]
@@ -375,12 +369,11 @@ with tab3:
                         st.error("Cannot use more than available.")
                     else:
                         conn = get_gsheet_conn()
-                        df = conn.read(worksheet=WORKSHEET_NAME)
+                        df = conn.read()
                         idx = df[df['id'] == selected_id].index[0]
                         new_qty = avail - qty_used
                         col_idx = df.columns.get_loc("quantity") + 1
                         conn.update(
-                            worksheet=WORKSHEET_NAME,
                             range=f"{chr(64 + col_idx)}{idx+2}",
                             values=[[new_qty]]
                         )
@@ -388,7 +381,7 @@ with tab3:
                         st.cache_data.clear()
                         st.rerun()
 
-# ── Remaining tabs (minimal) ───────────────────────────────────────────────
+# ── Remaining tabs ──────────────────────────────────────────────────────────
 with tab4:
     st.header("QR Code Tools")
     st.info("Coming soon...")
