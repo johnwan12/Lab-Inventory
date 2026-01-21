@@ -1,20 +1,18 @@
-# Core Streamlit
-streamlit>=1.38.0
+# Core
+streamlit==1.39.0   # or 1.38.0 — test these; avoid 1.37.0 if possible
 
-# Data handling
+# Data
 pandas>=2.0.0
 python-dateutil>=2.8.0
 
-# Google Sheets integration (main change)
-streamlit-gsheets-connection>=0.3.0
-gspread>=6.0.0          # Optional fallback / for more advanced operations if needed later
-google-auth>=2.0.0      # Required by gspread & connection
+# Google Sheets – use the official package name
+st-gsheets-connection>=0.3.0
 
-# Image / OCR features
+# Fallback/dependencies (explicitly include if needed)
+gspread>=6.0.0
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+
+# Image/OCR (unchanged)
 Pillow>=10.0.0
-pytesseract>=0.3.10     # Optional - only if you want to keep photo OCR
-
-# For hashing (still used for login)
-# No extra package needed - hashlib is in stdlib
-# If you upgrade to bcrypt later:
-# bcrypt>=4.0.0
+pytesseract>=0.3.10
