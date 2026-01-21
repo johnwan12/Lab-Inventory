@@ -1,18 +1,11 @@
-# Core
-streamlit==1.39.0   # or 1.38.0 — test these; avoid 1.37.0 if possible
-
-# Data
+streamlit==1.39.0
 pandas>=2.0.0
+numpy==1.26.4
 python-dateutil>=2.8.0
 
-# Google Sheets – use the official package name
 st-gsheets-connection>=0.3.0
-
-# Fallback/dependencies (explicitly include if needed)
 gspread>=6.0.0
 google-auth>=2.0.0
 google-auth-oauthlib>=1.0.0
 
-# Image/OCR (unchanged)
 Pillow>=10.0.0
-pytesseract>=0.3.10
