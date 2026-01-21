@@ -2,6 +2,7 @@ streamlit
 pandas
 numpy
 python-dateutil
+openpyxl'
 
 st-gsheets-connection
 gspread
@@ -9,4 +10,5 @@ google-auth
 google-auth-oauthlib
 
 Pillow
+
 
