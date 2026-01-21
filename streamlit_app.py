@@ -19,10 +19,46 @@ from streamlit_gsheets import GSheetsConnection
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System (Google Sheets)")
 
+#def get_gsheet_conn():
+    #return st.connection(
+       # "lab_gsheets",
+        #type=GSheetsConnection,
+        #spreadsheet="https://docs.google.com/spreadsheets/d/1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ/edit",
+        #worksheet="template"
+    #)
+
 def get_gsheet_conn():
+    from google.oauth2 import service_account
+    import json
+
+    # Paste your FULL service account JSON here (copy from downloaded .json file)
+    # IMPORTANT: Use triple quotes and preserve ALL newlines in private_key!
+    creds_dict = {
+        "type": "service_account",
+        "project_id": "YOUR_PROJECT_ID_HERE",
+        "private_key_id": "YOUR_PRIVATE_KEY_ID_HERE",
+        "private_key": """-----BEGIN PRIVATE KEY-----
+YOUR_FULL_PRIVATE_KEY_HERE_WITH_NEWLINES_PRESERVED
+-----END PRIVATE KEY-----
+""",
+        "client_email": "YOUR_SERVICE_ACCOUNT_EMAIL@project.iam.gserviceaccount.com",
+        "client_id": "YOUR_CLIENT_ID_HERE",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/YOUR_SERVICE_ACCOUNT_EMAIL%40project.iam.gserviceaccount.com",
+        "universe_domain": "googleapis.com"
+    }
+
+    creds = service_account.Credentials.from_service_account_info(
+        creds_dict,
+        scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    )
+
     return st.connection(
         "lab_gsheets",
         type=GSheetsConnection,
+        credentials=creds,
         spreadsheet="https://docs.google.com/spreadsheets/d/1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ/edit",
         worksheet="template"
     )
@@ -397,3 +433,4 @@ with tab5:
         col3.metric("Expired", sum(1 for a in alerts if "Expired" in a))
 
 st.caption("Laboratory Reagent Inventory • Streamlit + Google Sheets • January 2026")
+
