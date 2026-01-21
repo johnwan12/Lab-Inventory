@@ -3,3 +3,6 @@ pandas
 pillow
 pytesseract
 openpyxl   # optional but good for Excel
+psycopg2-binary
+sqlalchemy
+
