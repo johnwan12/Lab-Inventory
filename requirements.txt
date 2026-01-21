@@ -1,15 +1,4 @@
-streamlit
-pandas
-numpy
-python-dateutil
-openpyxl
-
-st-gsheets-connection
-gspread
-google-auth
-google-auth-oauthlib
-
-Pillow
-
-
-
+streamlit==1.36.0  # or 1.35.0 – pinning helps avoid internal Streamlit changes
+st-gsheets-connection>=0.3.0
+gspread>=6.0.0
+google-auth>=2.0.0
