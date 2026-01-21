@@ -1,11 +1,12 @@
-streamlit==1.39.0
-pandas>=2.0.0
-numpy==1.26.4
-python-dateutil>=2.8.0
+streamlit
+pandas
+numpy
+python-dateutil
 
-st-gsheets-connection>=0.3.0
-gspread>=6.0.0
-google-auth>=2.0.0
-google-auth-oauthlib>=1.0.0
+st-gsheets-connection
+gspread
+google-auth
+google-auth-oauthlib
 
-Pillow>=10.0.0
+Pillow
+
