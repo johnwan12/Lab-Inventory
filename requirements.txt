@@ -1,8 +1,20 @@
-streamlit
-pandas
-pillow
-pytesseract
-openpyxl   # optional but good for Excel
-psycopg2-binary
-sqlalchemy
+# Core Streamlit
+streamlit>=1.38.0
 
+# Data handling
+pandas>=2.0.0
+python-dateutil>=2.8.0
+
+# Google Sheets integration (main change)
+streamlit-gsheets-connection>=0.3.0
+gspread>=6.0.0          # Optional fallback / for more advanced operations if needed later
+google-auth>=2.0.0      # Required by gspread & connection
+
+# Image / OCR features
+Pillow>=10.0.0
+pytesseract>=0.3.10     # Optional - only if you want to keep photo OCR
+
+# For hashing (still used for login)
+# No extra package needed - hashlib is in stdlib
+# If you upgrade to bcrypt later:
+# bcrypt>=4.0.0
