@@ -57,6 +57,7 @@ def get_gsheet_conn():
             st.markdown("""
 **Quick fix – add this to your Streamlit Cloud Secrets (or .streamlit/secrets.toml):**
 ```toml
+""")
 [connections.gsheets]
 type = "gsheets"
 spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"   # ← your actual Sheet ID here
@@ -210,6 +211,7 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
