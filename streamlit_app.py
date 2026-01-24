@@ -17,27 +17,39 @@ st.caption("Streamlit + Google Sheets • Private connection via service account
 @st.cache_resource(show_spinner="Connecting to Google Sheets...")
 def get_gsheet_conn():
     try:
+        # This relies on secrets:
+        # [gcp_service_account] = service account credentials
+        # [connections.gsheets]
+        #   type = "gsheets"
+        #   spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"
         conn = st.connection("gsheets", type=GSheetsConnection)
-        
-        # Test read: no worksheet= → uses first tab / Sheet1
-        # nrows=1 → minimal, fast test
+
+        # ── Minimal test read ───────────────────────────────────────────────
+        # No worksheet= → uses the first sheet (or active gid if set in URL)
         test_df = conn.read(nrows=1)
-        
-        st.success(f"Connection & test read successful! {len(test_df)} row(s) fetched.", icon="✅")
+
+        # Optional: try to get more context about what was loaded
+        sheet_info = conn._client.open_by_key(conn.spreadsheet).sheet1.title \
+            if hasattr(conn, '_client') and conn.spreadsheet else "unknown sheet"
+
+        st.success(
+            f"Connection successful! "
+            f"Read 1 row from sheet: **{sheet_info}** "
+            f"(spreadsheet ID: {conn.spreadsheet[:8]}...)"
+        )
         return conn
-    except Exception as e:
-        st.error(f"Failed: {str(e)}", icon="🚨")
-        st.exception(e)  # Full traceback in app
-        
-        if "404" in str(e):
+
+    except ValueError as ve:
+        if "Spreadsheet must be specified" in str(ve):
+            st.error("Missing spreadsheet ID in secrets")
             st.markdown("""
-            **404 fixes to try (in order):**
-            1. Wrong spreadsheet ID – double-check URL: https://docs.google.com/spreadsheets/d/**ID**/edit
-            2. Service account not shared as Editor – re-add email and wait 10 min
-            3. Worksheet "template" missing – comment out worksheet in secrets/code
-            4. Re-download fresh JSON key and re-paste private_key with real line breaks
-            """)
-        st.stop()
+            **Fix – add this to Streamlit Cloud Secrets:**
+
+            ```toml
+            [connections.gsheets]
+            type = "gsheets"
+            spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"
+            # worksheet = "template"   # optional – exact tab name
 
 
 # ── Authentication (simple hash-based – consider st-authenticator later) ─────
@@ -188,5 +200,6 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
