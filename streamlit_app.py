@@ -14,19 +14,7 @@ st.title("🧪 Laboratory Reagent Inventory System")
 st.caption("Streamlit + Google Sheets • Private connection via service account")
 
 # streamlit_app.py - Laboratory Reagent Inventory System (Google Sheets)
-# Revised January 2026 - Uses GSheetsConnection + secrets.toml / Cloud Secrets
-
-import streamlit as st
-import pandas as pd
-from datetime import date
-import hashlib
-
-# Required import for the connection
-from streamlit_gsheets import GSheetsConnection
-
-st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
-st.title("🧪 Laboratory Reagent Inventory System")
-st.caption("Streamlit + Google Sheets • Private connection via service account")
+# Revised January 2026 - Uses GSheetsConnection + secrets.toml / Cloud Secret
 
 # ── Google Sheets Connection (uses secrets) ─────────────────────────────────
 @st.cache_resource(show_spinner="Connecting to Google Sheets...")
@@ -211,6 +199,7 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
