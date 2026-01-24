@@ -1,6 +1,7 @@
-streamlit
-pandas
-streamlit-gsheets
+#streamlit
+#pandas
+#streamlit-gsheets
+
 
 
 
