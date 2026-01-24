@@ -58,7 +58,7 @@ def get_gsheet_conn():
 type = "gsheets"
 spreadsheet = "91274987"
 # worksheet = "template"   # optional
-
+""")
 
 # ── Authentication (simple hash-based – consider st-authenticator later) ─────
 if "authenticated" not in st.session_state:
@@ -208,6 +208,7 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
