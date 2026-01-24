@@ -1,10 +1,22 @@
 # streamlit_app.py - Laboratory Reagent Inventory System (Google Sheets version)
 # Last revised: January 2026 - Secure secrets + GSheetsConnection best practices
 
-import streamlit as st
+#import streamlit as st
 import pandas as pd
 from datetime import date
 import hashlib
+
+import streamlit as st
+from st_gsheets_connection import GSheetsConnection
+
+conn = st.connection(
+    "gsheets",
+    type=GSheetsConnection
+)
+
+df = conn.read()
+st.dataframe(df)
+
 
 from streamlit_gsheets import GSheetsConnection
 
@@ -210,3 +222,4 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • Streamlit + Google Sheets • January 2026")
+
