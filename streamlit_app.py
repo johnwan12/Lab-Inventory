@@ -5,19 +5,11 @@
 import pandas as pd
 from datetime import date
 import hashlib
-
 import streamlit as st
 from st_gsheets_connection import GSheetsConnection
-
-conn = st.connection(
-    "gsheets",
-    type=GSheetsConnection
-)
-
+conn = st.connection("gsheets", type=GSheetsConnection)
 df = conn.read()
 st.dataframe(df)
-
-
 from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
@@ -222,4 +214,5 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • Streamlit + Google Sheets • January 2026")
+
 
