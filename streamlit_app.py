@@ -17,26 +17,34 @@ st.caption("Streamlit + Google Sheets • Private connection via service account
 @st.cache_resource(show_spinner="Connecting to Google Sheets...")
 def get_gsheet_conn():
     try:
-        # This auto-loads [gcp_service_account] and [connections.gsheets] from secrets
         conn = st.connection("gsheets", type=GSheetsConnection)
         
-        # Minimal test read to confirm connection + permissions
-        _ = conn.read(worksheet="template", nrows=1)
+        # Test read with explicit worksheet and small limit
+        test_df = conn.read(
+            worksheet="template",   # ← confirm this matches your actual sheet name (case-sensitive!)
+            nrows=1
+        )
         
-        st.success("Successfully connected to Google Sheets", icon="✅")
+        st.success(f"Connection OK – test read returned {len(test_df)} rows", icon="✅")
         return conn
+    
     except Exception as e:
-        st.error(f"Connection failed: {str(e)}", icon="🚨")
-        st.exception(e)  # Shows full traceback in the app for debugging
+        st.error(f"Connection / read failed: {str(e)}", icon="🚨")
+        st.exception(e)  # full traceback
         
-        st.markdown("""
-        **Common fixes:**
-        - Verify **[gcp_service_account]** and **[connections.gsheets]** exist in Streamlit Cloud Secrets
-        - Spreadsheet ID in secrets is correct: `spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"`
-        - Service account email is shared with the Sheet as **Editor**
-        - Google Sheets API + Drive API are enabled in Google Cloud Console
-        - Private key line breaks are preserved exactly (no extra spaces/quotes)
-        """)
+        if "404" in str(e):
+            st.warning("""
+            **Likely causes for 404:**
+            - Spreadsheet ID in secrets is wrong or sheet is deleted/moved
+            - Worksheet name "template" does not exist (check exact name in Google Sheets)
+            - Service account not shared as Editor → no access to export
+            - Secrets formatting issue (esp. private_key line breaks)
+            """)
+        
+        elif "Spreadsheet must be specified" in str(e):
+            st.warning("Add spreadsheet = \"your-sheet-id\" under [connections.gsheets] in secrets.")
+        
+        st.info("Spreadsheet ID (from URL): 1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ")
         st.stop()
 
 
@@ -188,3 +196,4 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
