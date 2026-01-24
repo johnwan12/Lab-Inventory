@@ -40,15 +40,40 @@ def get_gsheet_conn():
     except ValueError as ve:
         if "Spreadsheet must be specified" in str(ve):
             st.error("Spreadsheet ID is missing in secrets")
-            st.markdown("""
-            **Quick fix – add this to Streamlit Cloud Secrets:**
+            @st.cache_resource(show_spinner="Connecting to Google Sheets...")
+def get_gsheet_conn():
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+
+        # Minimal test read – no worksheet specified → uses first sheet
+        test_df = conn.read(nrows=1)
+
+        # Optional: try to show which sheet was accessed
+        sheet_info = "first sheet"
+        if hasattr(conn, '_client') and conn.spreadsheet:
+            try:
+                sheet_info = conn._client.open_by_key(conn.spreadsheet).sheet1.title
+            except:
+                pass
+
+        st.success(
+            f"Connection & test read successful! "
+            f"Read 1 row from: **{sheet_info}** "
+            f"(ID: {conn.spreadsheet[:8]}...)"
+        )
+        return conn
+
+    except ValueError as ve:
+        if "Spreadsheet must be specified" in str(ve):
+            st.error("Spreadsheet ID is missing in secrets")
+            st.markdown('''
+**Quick fix – add this to Streamlit Cloud Secrets:**
 
             ```toml
             [connections.gsheets]
             type = "gsheets"
             spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"
             # worksheet = "template"   # optional
-
 
 # ── Authentication (simple hash-based – consider st-authenticator later) ─────
 if "authenticated" not in st.session_state:
@@ -198,6 +223,7 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
