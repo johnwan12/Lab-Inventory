@@ -17,39 +17,37 @@ st.caption("Streamlit + Google Sheets • Private connection via service account
 @st.cache_resource(show_spinner="Connecting to Google Sheets...")
 def get_gsheet_conn():
     try:
-        # This relies on secrets:
-        # [gcp_service_account] = service account credentials
-        # [connections.gsheets]
-        #   type = "gsheets"
-        #   spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"
         conn = st.connection("gsheets", type=GSheetsConnection)
 
-        # ── Minimal test read ───────────────────────────────────────────────
-        # No worksheet= → uses the first sheet (or active gid if set in URL)
+        # Minimal test read – no worksheet specified → uses first sheet
         test_df = conn.read(nrows=1)
 
-        # Optional: try to get more context about what was loaded
-        sheet_info = conn._client.open_by_key(conn.spreadsheet).sheet1.title \
-            if hasattr(conn, '_client') and conn.spreadsheet else "unknown sheet"
+        # Optional: try to show which sheet was accessed
+        sheet_info = "first sheet"
+        if hasattr(conn, '_client') and conn.spreadsheet:
+            try:
+                sheet_info = conn._client.open_by_key(conn.spreadsheet).sheet1.title
+            except:
+                pass
 
         st.success(
-            f"Connection successful! "
-            f"Read 1 row from sheet: **{sheet_info}** "
-            f"(spreadsheet ID: {conn.spreadsheet[:8]}...)"
+            f"Connection & test read successful! "
+            f"Read 1 row from: **{sheet_info}** "
+            f"(ID: {conn.spreadsheet[:8]}...)"
         )
         return conn
 
     except ValueError as ve:
         if "Spreadsheet must be specified" in str(ve):
-            st.error("Missing spreadsheet ID in secrets")
+            st.error("Spreadsheet ID is missing in secrets")
             st.markdown("""
-            **Fix – add this to Streamlit Cloud Secrets:**
+            **Quick fix – add this to Streamlit Cloud Secrets:**
 
             ```toml
             [connections.gsheets]
             type = "gsheets"
             spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"
-            # worksheet = "template"   # optional – exact tab name
+            # worksheet = "template"   # optional
 
 
 # ── Authentication (simple hash-based – consider st-authenticator later) ─────
@@ -200,6 +198,7 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
