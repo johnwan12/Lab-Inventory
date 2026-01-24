@@ -1,6 +1,6 @@
 # streamlit_app.py
 # Laboratory Reagent Inventory System (Google Sheets version)
-# Revised January 2026 — gspread / google-auth version for Streamlit Cloud
+# Revised January 2026 — Fully Streamlit Cloud ready
 
 import streamlit as st
 import pandas as pd
@@ -14,27 +14,25 @@ st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
 st.caption("Powered by Streamlit + Google Sheets • Secure service account connection")
 
+# ── Google Sheets Connection (robust to escaped \n in private_key)
 @st.cache_resource
 def get_gsheet_conn():
     try:
-        # Load service account JSON from Streamlit secrets
         service_account_info = st.secrets["gcp_service_account"].copy()
 
         # Fix escaped line breaks in private_key
         if "private_key" in service_account_info:
             service_account_info["private_key"] = service_account_info["private_key"].replace("\\n", "\n")
 
-        # Define required scopes
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
 
-        # Authenticate
         creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
         client = gspread.authorize(creds)
 
-        # Open your spreadsheet URL from secrets
+        # Open spreadsheet URL from secrets
         sheet = client.open_by_url(st.secrets["spreadsheet_url"])
         worksheet = sheet.worksheet("template")
         return worksheet
@@ -43,6 +41,25 @@ def get_gsheet_conn():
         st.error("🚨 Failed to connect to Google Sheets")
         st.exception(e)
         st.stop()
+
+# ── Load Reagents safely
+@st.cache_data(ttl=600)
+def load_reagents(ws):
+    try:
+        data = ws.get_all_records()
+        df = pd.DataFrame(data)
+        if not df.empty and "expiration_date" in df.columns:
+            df["expiration_date"] = pd.to_datetime(df["expiration_date"], errors="coerce").dt.date
+        if "low_stock_threshold" not in df.columns:
+            df["low_stock_threshold"] = 1.0
+        return df
+    except Exception as e:
+        st.error("Failed to load reagent data")
+        st.exception(e)
+        return pd.DataFrame(columns=[
+            "id", "name", "cas_number", "supplier", "location",
+            "quantity", "unit", "expiration_date", "low_stock_threshold"
+        ])
 
 # ── Session-based Authentication
 if "authenticated" not in st.session_state:
@@ -80,18 +97,23 @@ if st.sidebar.button("🚪 Logout", use_container_width=True):
 
 st.sidebar.success(f"Logged in as **{st.session_state.username}** ({st.session_state.role})", icon="👤")
 
+# ── Load Reagents DataFrame
+worksheet = get_gsheet_conn()
+reagents_df = load_reagents(worksheet)
+
 # ── Alerts: Low Stock / Expired
 alerts = []
 today = date.today()
 
-for _, row in reagents_df.iterrows():
-    qty = row.get("quantity")
-    threshold = row.get("low_stock_threshold", 1.0)
-    if pd.notna(qty) and qty <= threshold:
-        alerts.append(f"⚠️ **Low stock**: {row['name']} → {qty:.2f} {row.get('unit', '')} (threshold: {threshold})")
-    exp = row.get("expiration_date")
-    if pd.notnull(exp) and exp < today:
-        alerts.append(f"❌ **Expired**: {row['name']} ({exp})")
+if not reagents_df.empty:
+    for _, row in reagents_df.iterrows():
+        qty = row.get("quantity")
+        threshold = row.get("low_stock_threshold", 1.0)
+        if pd.notna(qty) and qty <= threshold:
+            alerts.append(f"⚠️ **Low stock**: {row['name']} → {qty:.2f} {row.get('unit', '')} (threshold: {threshold})")
+        exp = row.get("expiration_date")
+        if pd.notnull(exp) and exp < today:
+            alerts.append(f"❌ **Expired**: {row['name']} ({exp})")
 
 if alerts:
     st.warning("\n".join(alerts), icon="🚨")
@@ -106,8 +128,8 @@ with tab_catalog:
     st.header("Reagent Catalog")
     search_term = st.text_input("Search by name, CAS, supplier or location")
 
-    df_view = reagents_df
-    if search_term:
+    df_view = reagents_df.copy()
+    if search_term and not df_view.empty:
         mask = (
             df_view["name"].str.contains(search_term, case=False, na=False) |
             df_view.get("cas_number", "").str.contains(search_term, case=False, na=False) |
@@ -152,4 +174,3 @@ with tab_admin:
         st.caption("Next steps: implement CRUD with worksheet.update() / append_row()")
 
 st.caption("Laboratory Reagent Inventory • Streamlit + Google Sheets • 2026")
-
