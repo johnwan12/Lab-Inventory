@@ -2,6 +2,7 @@
 streamlit==1.41.1
 pandas==2.2.2
 streamlit-gsheets==0.3.0
-python-dateutil==2.9.0.post0
+#python-dateutil==2.9.0.post0
 # explicitly avoid troublemakers unless really needed
 # opencv-python-headless==4.10.0.84   ← use headless if you need cv2
+
