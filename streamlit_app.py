@@ -38,6 +38,7 @@ def get_gsheet_conn():
 
         # Open spreadsheet URL from secrets
         sheet = client.open_by_url(st.secrets["spreadsheet_url"])
+        
         worksheet = sheet.worksheet("template")
         return worksheet
 
@@ -179,4 +180,5 @@ with tab_admin:
         st.caption("Next steps: implement CRUD with worksheet.update() / append_row()")
 
 st.caption("Laboratory Reagent Inventory • Streamlit + Google Sheets • 2026")
+
 
