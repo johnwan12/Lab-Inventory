@@ -1,3 +1,14 @@
-streamlit>=1.39
-pandas>=2.0
-st-gsheets-connection
+# Core
+streamlit>=1.42.0          # latest stable as of Jan 2026 should be around here or higher
+pandas>=2.2.3              # good support for datetime & numeric handling
+streamlit-gsheets>=0.3.0   # the official connector you're using
+
+# Optional but very useful / commonly added
+python-dateutil>=2.9.0     # helps with date parsing
+uuid                       # built-in since Python 3.7, but sometimes people list it
+openpyxl>=3.1.5            # if you ever export to .xlsx or read Excel backups
+
+# Development / debugging (optional)
+black>=24.8.0              # code formatter
+ruff>=0.9.0                # fast linter (replaces flake8 + many others)
+mypy>=1.13.0               # type checking
