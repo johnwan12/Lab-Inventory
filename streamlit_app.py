@@ -33,32 +33,34 @@ st.caption("Streamlit + Google Sheets • Private connection via service account
 def get_gsheet_conn():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        # Minimal test read – no worksheet specified → uses first sheet
+        
+        # Minimal test read – no worksheet specified → uses first sheet by default
         test_df = conn.read(nrows=1)
-
-        sheet_info = "first sheet"
-        if hasattr(conn, '_client') and conn.spreadsheet:
-            try:
-                sheet_info = conn._client.open_by_key(conn.spreadsheet).sheet1.title
-            except:
-                pass
-
+        
+        # Simplified success message (no risky attribute access)
+        sheet_info = "first/default sheet"
+        # If you really want the title and are willing to risk fragility:
+        # try:
+        #     sheet_info = conn._client.open_by_key(conn._spreadsheet).sheet1.title  # note the underscore
+        # except:
+        #     pass
+        
         st.success(
-            f"Connection & test read successful! Read 1 row from: **{sheet_info}** (ID: {conn.spreadsheet[:8]}...)"
+            f"Connection & test read successful! Read 1 row from **{sheet_info}** "
+            f"(Spreadsheet ID starts with: {conn._spreadsheet[:8]}... if set)"
         )
         return conn
-
+    
     except ValueError as ve:
         if "Spreadsheet must be specified" in str(ve):
             st.error("Spreadsheet ID is missing in secrets")
             st.markdown("""
-**Quick fix – add this to Streamlit Cloud Secrets:**
+**Quick fix – add this to your Streamlit Cloud Secrets (or .streamlit/secrets.toml):**
 ```toml
 [connections.gsheets]
 type = "gsheets"
-spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"
-# worksheet = "template"   # optional
-""")
+spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"   # ← your actual Sheet ID here
+# worksheet = "template"   # optional, can be specified in .read() calls instead
 
 # ── Authentication (simple hash-based – consider st-authenticator later) ─────
 if "authenticated" not in st.session_state:
@@ -208,6 +210,7 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
