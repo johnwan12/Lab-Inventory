@@ -1,69 +1,43 @@
 # streamlit_app.py - Laboratory Reagent Inventory System (Google Sheets version)
-# Updated January 2026 - with explicit credentials workaround + better debugging
+# Last revised: January 2026 - Secure secrets + GSheetsConnection best practices
 
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime
+from datetime import date
 import hashlib
-from PIL import Image
-import os
-from pathlib import Path
-
-try:
-    import pytesseract
-except ImportError:
-    pytesseract = None
 
 from streamlit_gsheets import GSheetsConnection
-from google.oauth2 import service_account
 
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
-st.title("🧪 Laboratory Reagent Inventory System (Google Sheets)")
+st.title("🧪 Laboratory Reagent Inventory System")
+st.caption("Powered by Streamlit + Google Sheets • Secure service account connection")
 
-# ── Connection with explicit credentials (temporary for debugging) ──────────
+# ── Secure Google Sheets Connection ─────────────────────────────────────────
+@st.cache_resource
 def get_gsheet_conn():
     try:
-        # === PASTE YOUR REAL SERVICE ACCOUNT VALUES HERE ===
-        creds_dict = {
-            "type": "service_account",
-            "project_id": "YOUR_PROJECT_ID_HERE",
-            "private_key_id": "YOUR_PRIVATE_KEY_ID_HERE",
-            "private_key": """-----BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC...
-# Paste the FULL private key exactly as it appears in your JSON file
-# Keep all line breaks and = padding characters
------END PRIVATE KEY-----""",
-            "client_email": "YOUR_SERVICE_ACCOUNT@project.iam.gserviceaccount.com",
-            "client_id": "YOUR_CLIENT_ID_HERE",
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-            "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/YOUR_SERVICE_ACCOUNT%40project.iam.gserviceaccount.com",
-            "universe_domain": "googleapis.com"
-        }
-
-        creds = service_account.Credentials.from_service_account_info(
-            creds_dict,
-            scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        )
-
         conn = st.connection(
-            "lab_gsheets_debug",
+            "gsheets",
             type=GSheetsConnection,
-            credentials=creds,
-            spreadsheet="https://docs.google.com/spreadsheets/d/1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ/edit",
-            worksheet="template"
+            # Optional: override spreadsheet if not set in secrets
+            # spreadsheet="https://docs.google.com/spreadsheets/d/1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ/edit"
         )
-
-        st.success("Google Sheets connection created successfully (debug mode)")
+        # Smoke test: try to read 1 row
+        conn.read(worksheet="template", nrows=1)
         return conn
-
     except Exception as e:
-        st.error(f"Failed to create Google Sheets connection: {str(e)}")
+        st.error(f"Failed to connect to Google Sheets: {str(e)}", icon="🚨")
+        st.info(
+            "Checklist:\n"
+            "• Service account JSON correctly saved in Streamlit Cloud Secrets under **[gcp_service_account]**\n"
+            "• Service account email added as **Editor** to the spreadsheet\n"
+            "• Google Sheets API and Drive API enabled in Google Cloud Console\n"
+            "• No typos in private_key (line breaks must be preserved)"
+        )
         st.stop()
 
 
-# ── Authentication (hardcoded for now) ──────────────────────────────────────
+# ── Simple Session-based Authentication ─────────────────────────────────────
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.username = None
@@ -71,43 +45,45 @@ if "authenticated" not in st.session_state:
 
 if not st.session_state.authenticated:
     st.subheader("🔐 Login Required")
-    with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login")
+    with st.form("login_form", clear_on_submit=True):
+        col1, col2 = st.columns([3, 2])
+        with col1:
+            username = st.text_input("Username")
+        with col2:
+            password = st.text_input("Password", type="password")
+        
+        submitted = st.form_submit_button("Login", use_container_width=True, type="primary")
+
         if submitted:
             hashed = hashlib.sha256(password.encode()).hexdigest()
             if username == "admin" and hashed == hashlib.sha256("admin123".encode()).hexdigest():
-                st.session_state.authenticated = True
-                st.session_state.username = username
-                st.session_state.role = "admin"
+                st.session_state.update({"authenticated": True, "username": username, "role": "admin"})
             elif username == "user" and hashed == hashlib.sha256("user123".encode()).hexdigest():
-                st.session_state.authenticated = True
-                st.session_state.username = username
-                st.session_state.role = "user"
-            
+                st.session_state.update({"authenticated": True, "username": username, "role": "user"})
+
             if st.session_state.authenticated:
-                st.success(f"Welcome, {username}! ({st.session_state.role.capitalize()})")
+                st.success(f"Welcome back, {username}! ({st.session_state.role.capitalize()})")
                 st.rerun()
             else:
-                st.error("Invalid username or password")
+                st.error("Invalid credentials. Try again.")
     st.stop()
 
-if st.sidebar.button("🚪 Logout"):
-    for key in ["authenticated", "username", "role"]:
-        if key in st.session_state:
+# Logout
+if st.sidebar.button("🚪 Logout", use_container_width=True):
+    for key in list(st.session_state.keys()):
+        if key in ["authenticated", "username", "role"]:
             del st.session_state[key]
     st.rerun()
 
-st.sidebar.success(f"Logged in as **{st.session_state.username}** ({st.session_state.role})")
+st.sidebar.success(f"Logged in as **{st.session_state.username}** ({st.session_state.role})", icon="👤")
 
 
 # ── Load Reagents ───────────────────────────────────────────────────────────
-@st.cache_data(ttl=300)
-def load_reagents():
-    conn = get_gsheet_conn()
+@st.cache_data(ttl="10min")
+def load_reagents(_conn):
     try:
-        df = conn.read(
+        df = _conn.read(
+            worksheet="template",
             usecols=[
                 "id", "name", "cas_number", "supplier", "location",
                 "quantity", "unit", "expiration_date", "low_stock_threshold"
@@ -118,133 +94,119 @@ def load_reagents():
                 "low_stock_threshold": float
             }
         )
+
         if not df.empty:
-            df['expiration_date'] = pd.to_datetime(df['expiration_date'], errors='coerce').dt.date
+            df["expiration_date"] = pd.to_datetime(df["expiration_date"], errors="coerce").dt.date
             df = df.sort_values("name")
-        if "low_stock_threshold" not in df.columns:
-            df["low_stock_threshold"] = 1.0
-        st.info(f"Loaded {len(df)} reagents from sheet.")
+
+        df["low_stock_threshold"] = df.get("low_stock_threshold", 1.0)
+
         return df
+
     except Exception as e:
-        st.error(f"Could not load data from Google Sheet: {str(e)}")
+        st.error(f"Data load failed: {str(e)}")
         return pd.DataFrame(columns=[
-            'id','name','cas_number','supplier','location',
-            'quantity','unit','expiration_date','low_stock_threshold'
+            "id", "name", "cas_number", "supplier", "location",
+            "quantity", "unit", "expiration_date", "low_stock_threshold"
         ])
 
 
-reagents_df = load_reagents()
+conn = get_gsheet_conn()
+reagents_df = load_reagents(conn)
 
 
-# ── Alerts ──────────────────────────────────────────────────────────────────
+# ── Generate Alerts ─────────────────────────────────────────────────────────
 alerts = []
 today = date.today()
+
 for _, row in reagents_df.iterrows():
-    threshold = row.get('low_stock_threshold', 1.0)
-    if pd.notna(row.get('quantity')) and row['quantity'] <= threshold:
-        alerts.append(f"⚠️ **Low Stock**: {row['name']} — {row['quantity']:.2f} {row['unit']} (threshold: {threshold})")
-    if pd.notnull(row.get('expiration_date')) and row['expiration_date'] < today:
-        alerts.append(f"❌ **Expired**: {row['name']} ({row['expiration_date']})")
+    qty = row.get("quantity")
+    threshold = row.get("low_stock_threshold", 1.0)
+    if pd.notna(qty) and qty <= threshold:
+        alerts.append(
+            f"⚠️ **Low stock**: {row['name']} → {qty:.2f} {row['unit']} "
+            f"(threshold: {threshold})"
+        )
+
+    exp = row.get("expiration_date")
+    if pd.notnull(exp) and exp < today:
+        alerts.append(f"❌ **Expired**: {row['name']} ({exp})")
 
 if alerts:
-    st.warning("\n\n".join(alerts))
+    st.warning("\n".join(alerts), icon="🚨")
 
 
-# ── Tabs ────────────────────────────────────────────────────────────────────
-if "active_tab" not in st.session_state:
-    st.session_state.active_tab = "Catalog"
+# ── Main Tabs ───────────────────────────────────────────────────────────────
+tab_catalog, tab_add, tab_log, tab_qr, tab_admin = st.tabs([
+    "📋 Catalog", "➕ Add Reagent", "📉 Log Usage", "🔲 QR Tools", "🛠 Admin"
+])
 
-tab_names = ["Catalog", "Add Reagent", "Log Usage", "QR Tools", "Admin"]
-tab1, tab2, tab3, tab4, tab5 = st.tabs(tab_names)
-
-
-# ── Catalog ────────────────────────────────────────────────────────────────
-with tab1:
+# ── Catalog Tab ─────────────────────────────────────────────────────────────
+with tab_catalog:
     st.header("Reagent Catalog")
-    search = st.text_input("🔍 Search by Name, CAS, or Location")
 
-    display_df = reagents_df
-    if search:
-        display_df = reagents_df[
-            reagents_df['name'].str.contains(search, case=False, na=False) |
-            reagents_df['cas_number'].str.contains(search, case=False, na=False) |
-            reagents_df['location'].str.contains(search, case=False, na=False)
-        ]
+    search_term = st.text_input("Search by name, CAS, supplier or location", key="search")
+    
+    df_view = reagents_df
+    if search_term:
+        mask = (
+            df_view["name"].str.contains(search_term, case=False, na=False) |
+            df_view["cas_number"].str.contains(search_term, case=False, na=False) |
+            df_view["supplier"].str.contains(search_term, case=False, na=False) |
+            df_view["location"].str.contains(search_term, case=False, na=False)
+        )
+        df_view = df_view[mask]
 
-    if display_df.empty:
-        st.info("No reagents found.")
+    if df_view.empty:
+        st.info("No matching reagents found.")
     else:
         if st.session_state.role == "admin":
-            editable_df = display_df.copy()
-            editable_df["Delete"] = False
-            editable_df["Edit"] = False
-
-            edited_df = st.data_editor(
-                editable_df,
-                column_config={
-                    "Edit": st.column_config.CheckboxColumn("Edit", default=False),
-                    "Delete": st.column_config.CheckboxColumn("Delete", default=False),
-                    "id": "ID",
-                    "name": "Name",
-                    "cas_number": "CAS Number",
-                    "supplier": "Supplier",
-                    "location": "Location",
-                    "quantity": st.column_config.NumberColumn("Quantity", format="%.2f"),
-                    "unit": "Unit",
-                    "expiration_date": "Expiration Date",
-                    "low_stock_threshold": st.column_config.NumberColumn("Low Stock Threshold", format="%.1f"),
-                },
-                hide_index=True,
+            # Placeholder: implement editing later with conn.update / upsert
+            st.dataframe(
+                df_view.style.format({"quantity": "{:.2f}"}),
                 use_container_width=True,
-                key="catalog_editor"
+                hide_index=True
+            )
+            st.info("Admin → Edit/Delete coming soon (using conn.update / conn.upsert)")
+        else:
+            st.dataframe(
+                df_view.style.format({"quantity": "{:.2f}"}),
+                use_container_width=True,
+                hide_index=True
             )
 
-            # Edit logic (simplified version - same as before)
-            to_edit = edited_df[edited_df["Edit"] == True]["id"].dropna().astype(int).tolist()
-            if to_edit:
-                edit_id = to_edit[0]
-                reagent = reagents_df[reagents_df['id'] == edit_id].iloc[0]
 
-                with st.expander(f"✏️ Edit: {reagent['name']} (ID: {edit_id})", expanded=True):
-                    # ... (keep your existing edit form code) ...
-                    # Update logic remains the same
-                    pass  # ← replace with your full edit/save code
-
-            # Delete logic (same as before)
-            to_delete = edited_df[edited_df["Delete"] == True]["id"].dropna().astype(int).tolist()
-            if to_delete:
-                # ... (keep your delete code) ...
-                pass
-
-        else:
-            st.dataframe(display_df.style.format({"quantity": "{:.2f}"}), use_container_width=True)
-            st.info("Only admin users can edit or delete reagents.")
+# ── Add Reagent Tab (placeholder) ───────────────────────────────────────────
+with tab_add:
+    st.header("Add New Reagent")
+    st.info("Form + conn.insert_rows() implementation pending")
 
 
-# ── Add Reagent, Log Usage, etc. ───────────────────────────────────────────
-# (keep the rest of your code unchanged - Add Reagent, Log Usage, OCR, tabs 4 & 5)
+# ── Log Usage Tab (placeholder) ─────────────────────────────────────────────
+with tab_log:
+    st.header("Log Reagent Usage")
+    st.info("Select reagent → reduce quantity → conn.update implementation pending")
 
-# Example placeholder for remaining tabs
-with tab2:
-    st.header("Add Reagent")
-    st.info("Add form & bulk upload code here (same as previous version)")
 
-with tab3:
-    st.header("Log Usage")
-    st.info("Log usage code here")
+# ── QR Tools Tab (placeholder) ──────────────────────────────────────────────
+with tab_qr:
+    st.header("QR Code Tools")
+    st.info("Generate / scan QR codes for quick lookup – coming soon")
 
-with tab4:
-    st.header("QR Tools")
-    st.info("Coming soon...")
 
-with tab5:
+# ── Admin Dashboard ─────────────────────────────────────────────────────────
+with tab_admin:
     if st.session_state.role != "admin":
-        st.error("Admin access only")
+        st.error("Admin access only.", icon="🔒")
     else:
-        st.header("Admin Dashboard")
+        st.header("Admin Overview")
         col1, col2, col3 = st.columns(3)
         col1.metric("Total Reagents", len(reagents_df))
-        col2.metric("Low Stock", sum(1 for a in alerts if "Low" in a))
-        col3.metric("Expired", sum(1 for a in alerts if "Expired" in a))
+        col2.metric("Low Stock Items", sum(1 for a in alerts if "Low" in a))
+        col3.metric("Expired Items", sum(1 for a in alerts if "Expired" in a))
+
+        st.markdown("---")
+        st.caption("Next steps: implement CRUD operations with `conn.insert_rows()`, `conn.update()`, `conn.upsert()`")
+
 
 st.caption("Laboratory Reagent Inventory • Streamlit + Google Sheets • January 2026")
