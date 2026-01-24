@@ -1,7 +1,7 @@
-streamlit>=1.37.0
-streamlit-gsheets>=0.5.0  # or latest
+streamlit
 gspread
 google-auth
+
 
 
 
