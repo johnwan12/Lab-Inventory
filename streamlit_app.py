@@ -18,7 +18,8 @@ st.caption("Powered by Streamlit + Google Sheets • Secure service account conn
 @st.cache_resource
 def get_gsheet_conn():
     try:
-        service_account_info = st.secrets["gcp_service_account"].copy()
+        # Convert Streamlit secrets to dict
+        service_account_info = dict(st.secrets["gcp_service_account"])
 
         # Fix escaped line breaks in private_key
         if "private_key" in service_account_info:
@@ -28,6 +29,9 @@ def get_gsheet_conn():
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
+
+        from google.oauth2.service_account import Credentials
+        import gspread
 
         creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
         client = gspread.authorize(creds)
@@ -41,6 +45,7 @@ def get_gsheet_conn():
         st.error("🚨 Failed to connect to Google Sheets")
         st.exception(e)
         st.stop()
+
 
 # ── Load Reagents safely
 @st.cache_data(ttl=600)
@@ -174,3 +179,4 @@ with tab_admin:
         st.caption("Next steps: implement CRUD with worksheet.update() / append_row()")
 
 st.caption("Laboratory Reagent Inventory • Streamlit + Google Sheets • 2026")
+
