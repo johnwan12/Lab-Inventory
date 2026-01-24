@@ -56,7 +56,7 @@ def get_gsheet_conn():
 ```toml
 [connections.gsheets]
 type = "gsheets"
-spreadsheet = "https://docs.google.com/spreadsheets/d/1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ/edit?gid=91274987#gid=91274987"
+spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"
 # worksheet = "template"   # optional
 """)
 
@@ -208,6 +208,7 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
