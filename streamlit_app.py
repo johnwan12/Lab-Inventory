@@ -19,32 +19,24 @@ def get_gsheet_conn():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         
-        # Test read with explicit worksheet and small limit
-        test_df = conn.read(
-            worksheet="template",   # ← confirm this matches your actual sheet name (case-sensitive!)
-            nrows=1
-        )
+        # Test read: no worksheet= → uses first tab / Sheet1
+        # nrows=1 → minimal, fast test
+        test_df = conn.read(nrows=1)
         
-        st.success(f"Connection OK – test read returned {len(test_df)} rows", icon="✅")
+        st.success(f"Connection & test read successful! {len(test_df)} row(s) fetched.", icon="✅")
         return conn
-    
     except Exception as e:
-        st.error(f"Connection / read failed: {str(e)}", icon="🚨")
-        st.exception(e)  # full traceback
+        st.error(f"Failed: {str(e)}", icon="🚨")
+        st.exception(e)  # Full traceback in app
         
         if "404" in str(e):
-            st.warning("""
-            **Likely causes for 404:**
-            - Spreadsheet ID in secrets is wrong or sheet is deleted/moved
-            - Worksheet name "template" does not exist (check exact name in Google Sheets)
-            - Service account not shared as Editor → no access to export
-            - Secrets formatting issue (esp. private_key line breaks)
+            st.markdown("""
+            **404 fixes to try (in order):**
+            1. Wrong spreadsheet ID – double-check URL: https://docs.google.com/spreadsheets/d/**ID**/edit
+            2. Service account not shared as Editor – re-add email and wait 10 min
+            3. Worksheet "template" missing – comment out worksheet in secrets/code
+            4. Re-download fresh JSON key and re-paste private_key with real line breaks
             """)
-        
-        elif "Spreadsheet must be specified" in str(e):
-            st.warning("Add spreadsheet = \"your-sheet-id\" under [connections.gsheets] in secrets.")
-        
-        st.info("Spreadsheet ID (from URL): 1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ")
         st.stop()
 
 
@@ -196,4 +188,5 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
