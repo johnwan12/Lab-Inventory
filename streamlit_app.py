@@ -10,7 +10,7 @@ import time
 from streamlit_gsheets import GSheetsConnection
 from google.oauth2.service_account import Credentials
 #from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+#from googleapiclient.errors import HttpError
 
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
@@ -248,4 +248,5 @@ with tab_admin:
         col3.metric("Expired", sum(1 for a in alerts if "Expired" in a))
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
