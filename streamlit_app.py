@@ -6,7 +6,8 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 import hashlib
-from streamlit_gsheets import GSheetsConnection
+#from streamlit_gsheets import GSheetsConnection
+from st_gsheets_connection import GSheetsConnection
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -315,3 +316,4 @@ with tab_admin:
                 st.rerun()
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
