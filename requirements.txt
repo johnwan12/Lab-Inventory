@@ -1,11 +1,8 @@
-streamlit
-#pandas
-#streamlit_gsheets
-st-gsheets-connection
+streamlit>=1.39.0
+pandas>=2.0.0
 
-
-
-
-
-
-
+# Google Sheets
+streamlit-gsheets-connection>=0.3.0
+google-api-python-client>=2.110.0
+google-auth>=2.25.0
+google-auth-oauthlib>=1.2.0
