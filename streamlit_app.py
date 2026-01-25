@@ -108,7 +108,7 @@ def load_reagents(_conn):
 # ── Alerts ──────────────────────────────────────────────────────────────────
 alerts = []
 today = date.today()
-for _, row in reagents_df.iterrows():
+#for _, row in reagents_df.iterrows():
     qty = row.get("quantity", 0)
     thresh = row.get("low_stock_threshold", 10.0)
     if qty <= thresh:
@@ -248,6 +248,7 @@ with tab_admin:
         col3.metric("Expired", sum(1 for a in alerts if "Expired" in a))
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
