@@ -103,7 +103,7 @@ def load_reagents(_conn):
         st.error(f"Could not load data: {str(e)}")
         return pd.DataFrame()
 
-reagents_df = load_reagents(read_conn)
+#reagents_df = load_reagents(read_conn)
 
 # ── Alerts ──────────────────────────────────────────────────────────────────
 alerts = []
@@ -248,6 +248,7 @@ with tab_admin:
         col3.metric("Expired", sum(1 for a in alerts if "Expired" in a))
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
