@@ -7,7 +7,7 @@ from datetime import date
 import hashlib
 from streamlit_gsheets import GSheetsConnection
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
+#from googleapiclient.discovery import build
 
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
@@ -283,3 +283,4 @@ with tab_admin:
         st.info("More admin features (bulk edit, export, audit log) can be added here.")
 
 st.caption("Laboratory Reagent Inventory • January 2026 • Powered by Streamlit + Google Sheets")
+
