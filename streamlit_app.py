@@ -55,19 +55,19 @@ def get_gsheet_conn():
 #spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"   # ← your actual Sheet ID here
 #worksheet = "template"   # optional, can be specified in .read() calls instead
 
-conn = st.connection(
-    "gsheets",
-    type=GSheetsConnection,
-    spreadsheet="1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"   # ← your ID
-)
+#import streamlit as st
+#from streamlit_gsheets import GSheetsConnection
 
-# Read data
-df = conn.read(
-    worksheet="template",   # sheet name (or index 0, or gid=91274987 from your earlier URL)
-    ttl="30m"               # cache 30 minutes – adjust as needed
-)
+# NO spreadsheet= here!
+#conn = st.connection("gsheets", type=GSheetsConnection)
 
-st.dataframe(df)
+# Now read – specify worksheet if not set in secrets
+#df = conn.read(
+    #worksheet="template",   # or 0, or gid=91274987
+    #ttl="10m"               # optional but recommended
+#)
+
+#st.dataframe(df)
 
 # ── Authentication (simple hash-based – consider st-authenticator later) ─────
 if "authenticated" not in st.session_state:
@@ -217,6 +217,7 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
