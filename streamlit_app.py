@@ -1,5 +1,5 @@
 # streamlit_app.py - Laboratory Reagent Inventory System
-# Revised - Safe read (no usecols), gspread for writes, debug helpers
+# Uses GSheetsConnection for reading + gspread for writing
 
 import streamlit as st
 import pandas as pd
@@ -11,40 +11,42 @@ from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
-st.caption("Streamlit + Google Sheets • Safe read + gspread writes")
+st.caption("Streamlit + Google Sheets • Read via st.connection • Write via gspread")
 
 # ── Connections ─────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Connecting to Google Sheets (read)...")
-def get_gsheet_conn():
+def get_read_connection():
     conn = st.connection("gsheets", type=GSheetsConnection)
     try:
-        test_df = conn.read(nrows=1)
-        st.success("Basic read connection OK")
+        conn.read(nrows=1)
     except Exception as e:
-        st.error(f"Basic connection test failed: {e}")
+        st.error(f"Read connection test failed: {e}")
+        st.stop()
     return conn
 
-@st.cache_resource(show_spinner="Initializing gspread (write)...")
-def get_gspread_client():
+
+@st.cache_resource(show_spinner="Initializing gspread client (write)...")
+def get_write_client():
     try:
-        creds_info = st.secrets["gsheets_service_account"]
+        sa_info = st.secrets["gsheets_service_account"]
         creds = Credentials.from_service_account_info(
-            creds_info,
+            sa_info,
             scopes=["https://www.googleapis.com/auth/spreadsheets"]
         )
         return gspread.authorize(creds)
     except KeyError:
-        st.error("Missing [gsheets_service_account] in secrets.toml / Cloud Secrets")
+        st.error(
+            "Missing [gsheets_service_account] section in secrets.\n"
+            "Please add your service account JSON to Streamlit Cloud Secrets "
+            "or .streamlit/secrets.toml"
+        )
         st.stop()
     except Exception as e:
-        st.error(f"gspread init failed: {e}")
+        st.error(f"Failed to initialize gspread client: {str(e)}")
         st.stop()
 
-conn = get_gsheet_conn()
 
-# Debug: Show what secrets keys are available (remove after testing)
-if st.session_state.get("debug_secrets", False):
-    st.write("Available secrets sections:", list(st.secrets.keys()))
+conn = get_read_connection()
 
 # ── Authentication ──────────────────────────────────────────────────────────
 if "authenticated" not in st.session_state:
@@ -82,35 +84,30 @@ if st.sidebar.button("🚪 Logout", use_container_width=True):
 
 st.sidebar.success(f"Logged in as **{st.session_state.username}** ({st.session_state.role})", icon="👤")
 
-# ── Load Data (safe version - no forced usecols) ────────────────────────────
+# ── Load Data ───────────────────────────────────────────────────────────────
 @st.cache_data(ttl="5min", show_spinner="Loading inventory...")
 def load_reagents(_conn):
     try:
-        # Read full worksheet first (avoids 400 from bad usecols)
+        # Read full sheet first → avoids column name validation errors
         df = _conn.read(worksheet="template")
 
-        # Debug: show actual columns found
-        st.session_state["sheet_columns"] = df.columns.tolist()
-        if "debug" in st.query_params:
-            st.info(f"Columns found in sheet: {df.columns.tolist()}")
-
-        # Select only expected columns if they exist
-        expected = [
+        # Select desired columns if they exist
+        cols = [
             "id", "name", "cas_number", "supplier", "location",
             "quantity", "unit", "expiration_date", "low_stock_threshold"
         ]
-        available = [col for col in expected if col in df.columns]
-        if available:
-            df = df[available]
+        existing_cols = [c for c in cols if c in df.columns]
+        if existing_cols:
+            df = df[existing_cols]
         else:
-            st.warning("None of the expected columns found. Check row 1 headers.")
+            st.warning("No expected columns found in the sheet.")
 
         if not df.empty:
             if "expiration_date" in df.columns:
                 df["expiration_date"] = pd.to_datetime(df["expiration_date"], errors="coerce").dt.date
             df = df.sort_values("name")
 
-        # Defaults
+        # Apply defaults
         if "quantity" in df.columns:
             df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0.0)
         if "low_stock_threshold" in df.columns:
@@ -119,14 +116,16 @@ def load_reagents(_conn):
         return df
 
     except Exception as e:
-        st.error(f"Failed to load data: {str(e)}\n"
-                 f"- Worksheet must be named exactly 'template'\n"
-                 f"- Row 1 must have headers\n"
-                 f"- Service account needs Editor access")
+        st.error(f"Failed to load reagents:\n{str(e)}\n\n"
+                 "Checklist:\n"
+                 "• Worksheet name = 'template' (case sensitive)\n"
+                 "• First row contains headers\n"
+                 "• Service account has Editor access to the spreadsheet")
         return pd.DataFrame(columns=[
             "id", "name", "cas_number", "supplier", "location",
             "quantity", "unit", "expiration_date", "low_stock_threshold"
         ])
+
 
 reagents_df = load_reagents(conn)
 
@@ -136,11 +135,11 @@ today = date.today()
 for _, row in reagents_df.iterrows():
     qty = row.get("quantity", 0)
     thresh = row.get("low_stock_threshold", 10.0)
-    if qty <= thresh and pd.notna(qty):
-        alerts.append(f"⚠️ Low Stock: {row.get('name', 'Unknown')} — {qty:.2f} {row.get('unit', '?')}")
+    if pd.notna(qty) and qty <= thresh:
+        alerts.append(f"⚠️ **Low Stock**: {row.get('name','?')} — {qty:.2f} {row.get('unit','?')}")
     exp = row.get("expiration_date")
     if pd.notnull(exp) and exp < today:
-        alerts.append(f"❌ Expired: {row.get('name', 'Unknown')} ({exp})")
+        alerts.append(f"❌ **Expired**: {row.get('name','?')} ({exp})")
 
 if alerts:
     st.warning("\n".join(alerts), icon="🚨")
@@ -152,101 +151,102 @@ tab_catalog, tab_add, tab_log, tab_qr, tab_admin = st.tabs([
 
 with tab_catalog:
     st.header("Reagent Catalog")
-    search = st.text_input("Search by name, CAS, supplier, location", "")
+    search = st.text_input("Search", "")
     df_view = reagents_df
     if search:
-        mask = df_view.astype(str).apply(
-            lambda x: x.str.contains(search, case=False, na=False)
-        ).any(axis=1)
+        mask = df_view.astype(str).apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
         df_view = df_view[mask]
     if df_view.empty:
         st.info("No matching reagents.")
     else:
-        st.dataframe(
-            df_view.style.format(precision=2),
-            use_container_width=True,
-            hide_index=True
-        )
+        st.dataframe(df_view.style.format(precision=2), use_container_width=True, hide_index=True)
 
 with tab_add:
     st.header("Add New Reagent")
-    with st.form("add_reagent_form", clear_on_submit=True):
+
+    with st.form("add_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            name = st.text_input("Reagent Name *")
-            cas_number = st.text_input("CAS Number")
+            name = st.text_input("Name *")
+            cas = st.text_input("CAS Number")
             supplier = st.text_input("Supplier")
             location = st.text_input("Location")
         with col2:
-            quantity = st.number_input("Initial Quantity *", min_value=0.0, value=100.0, step=0.1)
-            unit = st.selectbox("Unit", ["g", "mg", "kg", "L", "mL", "pcs", "bottles", "vials"])
-            expiration_date = st.date_input("Expiration Date", value=None)
-            low_stock_threshold = st.number_input("Low Stock Threshold", min_value=0.0, value=10.0, step=1.0)
+            quantity = st.number_input("Quantity *", min_value=0.0, value=100.0, step=0.1)
+            unit = st.selectbox("Unit", ["g", "mg", "L", "mL", "kg", "pcs", "bottles", "vials"])
+            exp_date = st.date_input("Expiration Date", value=None)
+            threshold = st.number_input("Low stock threshold", min_value=0.0, value=10.0, step=1.0)
 
-        submitted = st.form_submit_button("➕ Add Reagent", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("Add", type="primary", use_container_width=True)
 
         if submitted:
             if not name.strip():
-                st.error("Reagent Name is required.")
+                st.error("Name is required.")
             else:
-                try:
-                    client = get_gspread_client()
-                    ss = client.open_by_key(st.secrets.connections.gsheets.spreadsheet)
-                    ws = ss.worksheet("template")
+                with st.spinner("Adding..."):
+                    try:
+                        client = get_write_client()
+                        ss = client.open_by_key(st.secrets.connections.gsheets.spreadsheet)
+                        ws = ss.worksheet("template")
 
-                    new_row = [
-                        "",  # id – use =ROW()-1 in sheet if wanted
-                        name.strip(),
-                        cas_number.strip() or "",
-                        supplier.strip() or "",
-                        location.strip() or "",
-                        quantity,
-                        unit,
-                        expiration_date.strftime("%Y-%m-%d") if expiration_date else "",
-                        low_stock_threshold
-                    ]
-                    ws.append_row(new_row)
-                    st.success(f"**{name}** added!")
-                    load_reagents.clear()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Add failed: {str(e)}")
+                        row = [
+                            "",  # id – can use =ROW()-1 formula in sheet
+                            name.strip(),
+                            (cas or "").strip(),
+                            (supplier or "").strip(),
+                            (location or "").strip(),
+                            quantity,
+                            unit,
+                            exp_date.strftime("%Y-%m-%d") if exp_date else "",
+                            threshold
+                        ]
+
+                        ws.append_row(row)
+                        st.success(f"Added **{name}**")
+                        load_reagents.clear()
+                        st.rerun()
+
+                    except gspread.exceptions.WorksheetNotFound:
+                        st.error("Worksheet 'template' not found.")
+                    except Exception as e:
+                        st.error(f"Add failed: {str(e)}")
 
 with tab_log:
     st.header("Log Usage")
     if reagents_df.empty:
         st.info("No reagents loaded yet.")
     else:
-        selected_name = st.selectbox("Select Reagent", [""] + reagents_df["name"].tolist())
-        if selected_name:
-            row = reagents_df[reagents_df["name"] == selected_name].iloc[0]
-            current_qty = float(row.get("quantity", 0))
-            unit = row.get("unit", "?")
-            st.metric("Current Stock", f"{current_qty:.2f} {unit}")
+        selected = st.selectbox("Reagent", [""] + reagents_df["name"].tolist())
+        if selected:
+            row = reagents_df[reagents_df["name"] == selected].iloc[0]
+            curr_qty = float(row.get("quantity", 0))
+            unit = row.get("unit", "unit")
+            st.metric("Current stock", f"{curr_qty:.2f} {unit}")
 
-            with st.form("log_form"):
-                used_qty = st.number_input("Amount used", min_value=0.01, max_value=current_qty, step=0.1, format="%.2f")
-                submit_log = st.form_submit_button("📉 Log & Update", type="primary")
+            with st.form("usage_form"):
+                used = st.number_input("Amount used", min_value=0.01, max_value=curr_qty or 9999, step=0.1, format="%.2f")
+                submit = st.form_submit_button("Update stock", type="primary")
 
-                if submit_log and used_qty > 0:
-                    new_qty = current_qty - used_qty
-                    try:
-                        client = get_gspread_client()
-                        ss = client.open_by_key(st.secrets.connections.gsheets.spreadsheet)
-                        ws = ss.worksheet("template")
+                if submit and used > 0:
+                    new_qty = curr_qty - used
+                    with st.spinner("Updating..."):
+                        try:
+                            client = get_write_client()
+                            ss = client.open_by_key(st.secrets.connections.gsheets.spreadsheet)
+                            ws = ss.worksheet("template")
 
-                        idx = reagents_df[reagents_df["name"] == selected_name].index[0]
-                        row_num = idx + 2  # header = 1
-                        col_idx = reagents_df.columns.get_loc("quantity")
-                        col_letter = chr(65 + col_idx)
-                        cell = f"{col_letter}{row_num}"
+                            idx = reagents_df[reagents_df["name"] == selected].index[0]
+                            row_num = idx + 2  # 1 = header
+                            col_idx = reagents_df.columns.get_loc("quantity")
+                            col_letter = chr(65 + col_idx)
+                            cell = f"{col_letter}{row_num}"
 
-                        ws.update(cell, new_qty)
-                        st.success(f"Updated → **{new_qty:.2f} {unit}**")
-                        load_reagents.clear()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Update failed: {str(e)}")
+                            ws.update(cell, new_qty)
+                            st.success(f"New quantity: **{new_qty:.2f} {unit}**")
+                            load_reagents.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Update failed: {str(e)}")
 
 with tab_qr:
     st.header("QR Tools")
@@ -254,17 +254,12 @@ with tab_qr:
 
 with tab_admin:
     if st.session_state.role != "admin":
-        st.error("Admin only", icon="🔒")
+        st.error("Admin access only", icon="🔒")
     else:
         st.header("Admin Dashboard")
         col1, col2, col3 = st.columns(3)
-        col1.metric("Total Reagents", len(reagents_df))
-        col2.metric("Low Stock", sum(1 for a in alerts if "Low Stock" in a))
+        col1.metric("Total reagents", len(reagents_df))
+        col2.metric("Low stock", sum(1 for a in alerts if "Low Stock" in a))
         col3.metric("Expired", sum(1 for a in alerts if "Expired" in a))
 
-        # Debug toggle
-        st.checkbox("Show debug info (columns, etc.)", key="debug", value=False)
-        if st.session_state.debug:
-            st.write("Loaded columns:", st.session_state.get("sheet_columns", []))
-
-st.caption("Laboratory Reagent Inventory • January 2026")
+st.caption("Lab Inventory • January 2026")
