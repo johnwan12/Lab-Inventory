@@ -34,7 +34,7 @@ def init_sheets():
     
     return read_conn, sheets_service, spreadsheet_id
 
-read_conn, sheets_service, SPREADSHEET_ID = init_sheets()
+#read_conn, sheets_service, SPREADSHEET_ID = init_sheets()
 
 WORKSHEET = "template"
 READ_RANGE = f"{WORKSHEET}!A:I"   # adjust columns as needed (A to I = 9 columns)
@@ -248,5 +248,6 @@ with tab_admin:
         col3.metric("Expired", sum(1 for a in alerts if "Expired" in a))
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
