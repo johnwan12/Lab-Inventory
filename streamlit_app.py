@@ -50,10 +50,24 @@ def get_gsheet_conn():
 # Required: link to your Google Sheet
 #spreadsheet = "https://docs.google.com/spreadsheets/d/1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ/edit?gid=91274987#gid=91274987"
 
-[connections.gsheets]
-type = "gsheets"
-spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"   # ← your actual Sheet ID here
-worksheet = "template"   # optional, can be specified in .read() calls instead
+#[connections.gsheets]
+#type = "gsheets"
+#spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"   # ← your actual Sheet ID here
+#worksheet = "template"   # optional, can be specified in .read() calls instead
+
+conn = st.connection(
+    "gsheets",
+    type=GSheetsConnection,
+    spreadsheet="1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"   # ← your ID
+)
+
+# Read data
+df = conn.read(
+    worksheet="template",   # sheet name (or index 0, or gid=91274987 from your earlier URL)
+    ttl="30m"               # cache 30 minutes – adjust as needed
+)
+
+st.dataframe(df)
 
 # ── Authentication (simple hash-based – consider st-authenticator later) ─────
 if "authenticated" not in st.session_state:
@@ -203,6 +217,7 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
