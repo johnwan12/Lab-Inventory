@@ -46,14 +46,14 @@ def get_gsheet_conn():
 **Quick fix – add this to your Streamlit Cloud Secrets (or .streamlit/secrets.toml):**
 ```toml
 """)
-[connections.gsheets]
-# Required: link to your Google Sheet
-spreadsheet = "https://docs.google.com/spreadsheets/d/1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ/edit?gid=91274987#gid=91274987"
-
 #[connections.gsheets]
-#type = "gsheets"
-#spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"   # ← your actual Sheet ID here
-# worksheet = "template"   # optional, can be specified in .read() calls instead
+# Required: link to your Google Sheet
+#spreadsheet = "https://docs.google.com/spreadsheets/d/1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ/edit?gid=91274987#gid=91274987"
+
+[connections.gsheets]
+type = "gsheets"
+spreadsheet = "1xorAPoWd81bUE2yeJN4QsEhpEoUZ5yvdGIm2h9MHbkQ"   # ← your actual Sheet ID here
+worksheet = "template"   # optional, can be specified in .read() calls instead
 
 # ── Authentication (simple hash-based – consider st-authenticator later) ─────
 if "authenticated" not in st.session_state:
@@ -203,6 +203,7 @@ with tab_admin:
 
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
