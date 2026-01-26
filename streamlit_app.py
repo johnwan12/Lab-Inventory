@@ -2,6 +2,10 @@
 # Full CRUD using Google Sheets API v4 (no st-gsheets-connection)
 # Revised: January 2026
 
+# streamlit_app.py - Laboratory Reagent Inventory System
+# Full CRUD using Google Sheets API v4 (no st-gsheets-connection)
+# Revised: January 2026
+
 import streamlit as st
 import pandas as pd
 from datetime import date
@@ -11,12 +15,19 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-creds = st.secrets[google_service_account]
+# ────────────────────────────────────────────────
+# Load Google service account credentials
+# ────────────────────────────────────────────────
+
+creds = st.secrets["google_service_account"]
 
 credentials = Credentials.from_service_account_info(
     creds,
     scopes=["https://www.googleapis.com/auth/spreadsheets"]
 )
+
+# Build Google Sheets API service
+service = build("sheets", "v4", credentials=credentials)
 
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
@@ -318,6 +329,7 @@ with tab_admin:
                 st.rerun()
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
