@@ -1,6 +1,6 @@
 streamlit>=1.39.0,<1.43.0
 pandas>=2.0.0,<2.3.0
-st-gsheets-connection>=0.3.0,<0.6.0
+#st-gsheets-connection>=0.3.0,<0.6.0
 
 # If you're also using the Google Sheets API v4 directly:
 google-api-python-client==2.111.0
@@ -8,3 +8,4 @@ google-auth==2.25.2
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.1
 protobuf==4.25.3
+
