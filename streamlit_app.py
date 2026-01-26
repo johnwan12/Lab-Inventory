@@ -1,6 +1,6 @@
 # streamlit_app.py - Laboratory Reagent Inventory System
 # Full CRUD using Google Sheets API v4 (no st-gsheets-connection)
-# Revised January 2026
+# Revised: January 2026
 
 import streamlit as st
 import pandas as pd
@@ -12,24 +12,31 @@ from googleapiclient.errors import HttpError
 
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
-st.caption("Streamlit + Google Sheets API v4 • Full CRUD")
+st.caption("Streamlit + Google Sheets API v4 • Full CRUD operations")
 
-# ── Connections ─────────────────────────────────────────────────────────────
-@st.cache_resource(show_spinner="Initializing Google Sheets API...")
-def init_sheets_service():
-    sa_info = st.secrets["google_service_account"]
-    creds = Credentials.from_service_account_info(
-        sa_info,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"]
-    )
-    service = build('sheets', 'v4', credentials=creds).spreadsheets()
-    spreadsheet_id = st.secrets.connections.gsheets.spreadsheet
-    return service, spreadsheet_id
+# ── Initialize Google Sheets API client ─────────────────────────────────────
+@st.cache_resource(show_spinner="Connecting to Google Sheets...")
+def get_sheets_service():
+    try:
+        sa_info = st.secrets["google_service_account"]
+        creds = Credentials.from_service_account_info(
+            sa_info,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+        service = build('sheets', 'v4', credentials=creds).spreadsheets()
+        spreadsheet_id = st.secrets.connections.gsheets.spreadsheet
+        return service, spreadsheet_id
+    except KeyError as e:
+        st.error(f"Missing secrets key: {e}\n\nPlease check Streamlit Cloud Secrets.")
+        st.stop()
+    except Exception as e:
+        st.error(f"Failed to initialize Sheets service: {str(e)}")
+        st.stop()
 
-sheets_service, SPREADSHEET_ID = init_sheets_service()
+sheets_service, SPREADSHEET_ID = get_sheets_service()
 
-WORKSHEET = "template"          # your tab name
-DATA_RANGE = f"{WORKSHEET}!A1:I"  # adjust columns if needed (A to I = 9 columns)
+WORKSHEET = "template"                # ← your sheet tab name
+READ_RANGE = f"{WORKSHEET}!A1:I1000"  # ← adjust if you have more columns/rows
 
 # ── Authentication ──────────────────────────────────────────────────────────
 if "authenticated" not in st.session_state:
@@ -57,7 +64,7 @@ if not st.session_state.authenticated:
                 st.success(f"Welcome, {username}! ({st.session_state.role.capitalize()})")
                 st.rerun()
             else:
-                st.error("Invalid credentials")
+                st.error("Invalid username or password")
     st.stop()
 
 if st.sidebar.button("🚪 Logout", use_container_width=True):
@@ -73,7 +80,7 @@ def load_reagents():
     try:
         result = sheets_service.values().get(
             spreadsheetId=SPREADSHEET_ID,
-            range=DATA_RANGE
+            range=READ_RANGE
         ).execute()
         
         values = result.get('values', [])
@@ -99,7 +106,7 @@ def load_reagents():
         return df.sort_values("name")
     
     except Exception as e:
-        st.error(f"Failed to load data: {str(e)}")
+        st.error(f"Failed to load data: {str(e)}\n\nCheck: sheet ID, tab name, service account permissions")
         return pd.DataFrame()
 
 reagents_df = load_reagents()
@@ -124,7 +131,6 @@ tab_catalog, tab_add, tab_log, tab_qr, tab_admin = st.tabs([
     "📋 Catalog", "➕ Add", "📉 Log Usage", "🔲 QR", "🛠 Admin"
 ])
 
-# Catalog
 with tab_catalog:
     st.header("Reagent Catalog")
     search = st.text_input("Search", "")
@@ -137,31 +143,33 @@ with tab_catalog:
     else:
         st.dataframe(df_view.style.format(precision=2), use_container_width=True, hide_index=True)
 
-# Add
 with tab_add:
     st.header("Add New Reagent")
+    
     with st.form("add_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
             name = st.text_input("Name *")
-            cas = st.text_input("CAS Number")
+            cas_number = st.text_input("CAS Number")
             supplier = st.text_input("Supplier")
             location = st.text_input("Location")
         with col2:
-            qty = st.number_input("Quantity *", min_value=0.0, value=100.0, step=0.1)
+            quantity = st.number_input("Initial Quantity *", min_value=0.0, value=100.0, step=0.1)
             unit = st.selectbox("Unit", ["g", "mg", "L", "mL", "kg", "pcs", "bottles"])
             exp_date = st.date_input("Expiration Date", value=None)
-            threshold = st.number_input("Low stock threshold", min_value=0.0, value=5.0, step=1.0)
+            low_stock_threshold = st.number_input("Low Stock Threshold", min_value=0.0, value=10.0, step=1.0)
 
-        if st.form_submit_button("Add", type="primary"):
+        submitted = st.form_submit_button("➕ Add", type="primary", use_container_width=True)
+
+        if submitted:
             if not name.strip():
-                st.error("Name required.")
+                st.error("Reagent name is required.")
             else:
                 row = [
-                    "", name.strip(), cas.strip() or "", supplier.strip() or "",
-                    location.strip() or "", str(qty), unit,
+                    "", name.strip(), cas_number.strip() or "", supplier.strip() or "",
+                    location.strip() or "", str(quantity), unit,
                     exp_date.strftime("%Y-%m-%d") if exp_date else "",
-                    str(threshold)
+                    str(low_stock_threshold)
                 ]
                 body = {"values": [row]}
                 try:
@@ -178,60 +186,59 @@ with tab_add:
                 except Exception as e:
                     st.error(f"Add failed: {str(e)}")
 
-# Log Usage
 with tab_log:
     st.header("Log Usage")
     if reagents_df.empty:
-        st.info("No reagents yet.")
+        st.info("No reagents loaded yet.")
     else:
-        selected = st.selectbox("Reagent", [""] + reagents_df["name"].tolist())
-        if selected:
-            row = reagents_df[reagents_df["name"] == selected].iloc[0]
+        selected_name = st.selectbox("Select Reagent", options=[""] + reagents_df["name"].tolist())
+        if selected_name:
+            row = reagents_df[reagents_df["name"] == selected_name].iloc[0]
             curr_qty = float(row.get("quantity", 0))
             unit = row.get("unit", "?")
-            st.metric("Current", f"{curr_qty:.2f} {unit}")
+            st.metric("Current Stock", f"{curr_qty:.2f} {unit}")
 
-            with st.form("usage_form"):
-                used = st.number_input("Used amount", min_value=0.01, max_value=curr_qty, step=0.1)
-                if st.form_submit_button("Update", type="primary"):
-                    if used > 0:
-                        new_qty = curr_qty - used
-                        df_idx = reagents_df[reagents_df["name"] == selected].index[0]
-                        sheet_row = df_idx + 2
-                        
-                        # ← IMPORTANT: change this to your actual quantity column letter
-                        qty_col_letter = "F"   # e.g. F if quantity is the 6th column (A=1, B=2, ..., F=6)
+            with st.form("log_form"):
+                used_qty = st.number_input("Amount used", min_value=0.01, max_value=curr_qty, step=0.1, format="%.2f")
+                submitted = st.form_submit_button("📉 Update", type="primary")
 
-                        range_name = f"{WORKSHEET}!{qty_col_letter}{sheet_row}"
-                        body = {"values": [[str(new_qty)]]}
-                        
-                        try:
-                            sheets_service.values().update(
-                                spreadsheetId=SPREADSHEET_ID,
-                                range=range_name,
-                                valueInputOption="RAW",
-                                body=body
-                            ).execute()
-                            st.success(f"Updated → {new_qty:.2f} {unit}")
-                            load_reagents.clear()
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Update failed: {str(e)}")
+                if submitted:
+                    new_qty = curr_qty - used_qty
+                    df_idx = reagents_df[reagents_df["name"] == selected_name].index[0]
+                    sheet_row = df_idx + 2
+                    
+                    # ← IMPORTANT: change this to match your sheet structure
+                    # A=1=id, B=2=name, C=3=cas_number, D=4=supplier, E=5=location, F=6=quantity
+                    qty_col_letter = "F"
+                    
+                    range_name = f"{WORKSHEET}!{qty_col_letter}{sheet_row}"
+                    body = {"values": [[str(new_qty)]]}
+                    
+                    try:
+                        sheets_service.values().update(
+                            spreadsheetId=SPREADSHEET_ID,
+                            range=range_name,
+                            valueInputOption="RAW",
+                            body=body
+                        ).execute()
+                        st.success(f"Updated to **{new_qty:.2f} {unit}**")
+                        load_reagents.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Update failed: {str(e)}")
 
-# QR placeholder
 with tab_qr:
     st.header("QR Tools")
     st.info("Coming soon...")
 
-# Admin
 with tab_admin:
     if st.session_state.role != "admin":
         st.error("Admin access only", icon="🔒")
     else:
         st.header("Admin Dashboard")
         col1, col2, col3 = st.columns(3)
-        col1.metric("Total reagents", len(reagents_df))
-        col2.metric("Low stock", sum(1 for a in alerts if "Low Stock" in a))
+        col1.metric("Total Reagents", len(reagents_df))
+        col2.metric("Low Stock", sum(1 for a in alerts if "Low Stock" in a))
         col3.metric("Expired", sum(1 for a in alerts if "Expired" in a))
 
         # Bulk edit
@@ -243,9 +250,9 @@ with tab_admin:
             hide_index=False
         )
 
-        if st.button("Save Changes", type="primary"):
+        if st.button("💾 Save Changes", type="primary"):
             if edited_df.equals(reagents_df):
-                st.info("No changes.")
+                st.info("No changes detected.")
             else:
                 for idx, row in edited_df.iterrows():
                     original = reagents_df.iloc[idx]
@@ -271,9 +278,9 @@ with tab_admin:
                 st.rerun()
 
         # Delete
-        st.subheader("Delete")
-        to_delete = st.multiselect("Select to delete", reagents_df["name"].tolist())
-        if st.button("Delete Selected"):
+        st.subheader("Delete Reagents")
+        to_delete = st.multiselect("Select reagents to delete", options=reagents_df["name"].tolist())
+        if st.button("🗑️ Delete Selected"):
             if not to_delete:
                 st.info("No selection.")
             else:
@@ -287,7 +294,7 @@ with tab_admin:
                                 "requests": [{
                                     "deleteDimension": {
                                         "range": {
-                                            "sheetId": 0,  # change if your sheet ID is different
+                                            "sheetId": 0,  # ← change if your sheetId is different
                                             "dimension": "ROWS",
                                             "startIndex": sheet_row - 1,
                                             "endIndex": sheet_row
@@ -298,7 +305,7 @@ with tab_admin:
                         ).execute()
                     except Exception as e:
                         st.error(f"Delete {name} failed: {e}")
-                st.success(f"Deleted {len(to_delete)} items")
+                st.success(f"Deleted {len(to_delete)} reagent(s)")
                 load_reagents.clear()
                 st.rerun()
 
