@@ -1,40 +1,35 @@
 # streamlit_app.py - Laboratory Reagent Inventory System
-# Full CRUD via Google Sheets API v4 (writes) + st.connection (reads)
-# Last revised: January 2026
+# Full CRUD using Google Sheets API v4 (no st-gsheets-connection)
+# Revised January 2026
 
 import streamlit as st
 import pandas as pd
 from datetime import date
 import hashlib
-#from streamlit_gsheets import GSheetsConnection
-from st_gsheets_connection import GSheetsConnection
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
-st.caption("Streamlit + Google Sheets API v4 • Full CRUD support")
+st.caption("Streamlit + Google Sheets API v4 • Full CRUD")
 
 # ── Connections ─────────────────────────────────────────────────────────────
-@st.cache_resource(show_spinner="Initializing connections...")
-def init_connections():
-    read_conn = st.connection("gsheets", type=GSheetsConnection)
-    
+@st.cache_resource(show_spinner="Initializing Google Sheets API...")
+def init_sheets_service():
     sa_info = st.secrets["google_service_account"]
     creds = Credentials.from_service_account_info(
         sa_info,
         scopes=["https://www.googleapis.com/auth/spreadsheets"]
     )
-    sheets_service = build('sheets', 'v4', credentials=creds).spreadsheets()
-    
+    service = build('sheets', 'v4', credentials=creds).spreadsheets()
     spreadsheet_id = st.secrets.connections.gsheets.spreadsheet
-    
-    return read_conn, sheets_service, spreadsheet_id
+    return service, spreadsheet_id
 
-read_conn, sheets_service, SPREADSHEET_ID = init_connections()
+sheets_service, SPREADSHEET_ID = init_sheets_service()
 
-WORKSHEET = "template"
+WORKSHEET = "template"          # your tab name
+DATA_RANGE = f"{WORKSHEET}!A1:I"  # adjust columns if needed (A to I = 9 columns)
 
 # ── Authentication ──────────────────────────────────────────────────────────
 if "authenticated" not in st.session_state:
@@ -66,41 +61,48 @@ if not st.session_state.authenticated:
     st.stop()
 
 if st.sidebar.button("🚪 Logout", use_container_width=True):
-    for k in ["authenticated", "username", "role"]:
-        st.session_state.pop(k, None)
+    for key in ["authenticated", "username", "role"]:
+        st.session_state.pop(key, None)
     st.rerun()
 
 st.sidebar.success(f"Logged in as **{st.session_state.username}** ({st.session_state.role})", icon="👤")
 
 # ── Load Data ───────────────────────────────────────────────────────────────
-@st.cache_data(ttl=300, show_spinner="Loading inventory...")  # 5 minutes
-def load_reagents(_conn):
+@st.cache_data(ttl=300, show_spinner="Loading inventory...")
+def load_reagents():
     try:
-        df = _conn.read(worksheet=WORKSHEET)
+        result = sheets_service.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=DATA_RANGE
+        ).execute()
         
-        cols = [
+        values = result.get('values', [])
+        if not values:
+            return pd.DataFrame()
+        
+        headers = values[0]
+        data = values[1:]
+        df = pd.DataFrame(data, columns=headers)
+        
+        expected = [
             "id", "name", "cas_number", "supplier", "location",
             "quantity", "unit", "expiration_date", "low_stock_threshold"
         ]
-        df = df[[c for c in cols if c in df.columns]]
+        df = df[[c for c in expected if c in df.columns]]
         
-        if not df.empty:
-            if "expiration_date" in df.columns:
-                df["expiration_date"] = pd.to_datetime(df["expiration_date"], errors="coerce").dt.date
-            df = df.sort_values("name")
+        if "expiration_date" in df.columns:
+            df["expiration_date"] = pd.to_datetime(df["expiration_date"], errors="coerce").dt.date
         
         df["quantity"] = pd.to_numeric(df.get("quantity", 0), errors="coerce").fillna(0.0)
         df["low_stock_threshold"] = pd.to_numeric(df.get("low_stock_threshold", 10.0), errors="coerce").fillna(10.0)
         
-        return df
+        return df.sort_values("name")
+    
     except Exception as e:
-        st.error(f"Load failed: {str(e)}\nCheck: worksheet name, headers, service account permissions")
-        return pd.DataFrame(columns=[
-            "id", "name", "cas_number", "supplier", "location",
-            "quantity", "unit", "expiration_date", "low_stock_threshold"
-        ])
+        st.error(f"Failed to load data: {str(e)}")
+        return pd.DataFrame()
 
-reagents_df = load_reagents(read_conn)
+reagents_df = load_reagents()
 
 # ── Alerts ──────────────────────────────────────────────────────────────────
 alerts = []
@@ -122,7 +124,7 @@ tab_catalog, tab_add, tab_log, tab_qr, tab_admin = st.tabs([
     "📋 Catalog", "➕ Add", "📉 Log Usage", "🔲 QR", "🛠 Admin"
 ])
 
-# ── Catalog ─────────────────────────────────────────────────────────────────
+# Catalog
 with tab_catalog:
     st.header("Reagent Catalog")
     search = st.text_input("Search", "")
@@ -133,16 +135,11 @@ with tab_catalog:
     if df_view.empty:
         st.info("No matching reagents.")
     else:
-        st.dataframe(
-            df_view.style.format(precision=2),
-            use_container_width=True,
-            hide_index=True
-        )
+        st.dataframe(df_view.style.format(precision=2), use_container_width=True, hide_index=True)
 
-# ── Add ─────────────────────────────────────────────────────────────────────
+# Add
 with tab_add:
     st.header("Add New Reagent")
-    
     with st.form("add_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
@@ -156,9 +153,7 @@ with tab_add:
             exp_date = st.date_input("Expiration Date", value=None)
             threshold = st.number_input("Low stock threshold", min_value=0.0, value=5.0, step=1.0)
 
-        submitted = st.form_submit_button("Add", type="primary", use_container_width=True)
-
-        if submitted:
+        if st.form_submit_button("Add", type="primary"):
             if not name.strip():
                 st.error("Name required.")
             else:
@@ -183,7 +178,7 @@ with tab_add:
                 except Exception as e:
                     st.error(f"Add failed: {str(e)}")
 
-# ── Log Usage ───────────────────────────────────────────────────────────────
+# Log Usage
 with tab_log:
     st.header("Log Usage")
     if reagents_df.empty:
@@ -197,16 +192,16 @@ with tab_log:
             st.metric("Current", f"{curr_qty:.2f} {unit}")
 
             with st.form("usage_form"):
-                used = st.number_input("Used amount", min_value=0.01, max_value=curr_qty, step=0.1, format="%.2f")
-                if st.form_submit_button("Update stock", type="primary"):
+                used = st.number_input("Used amount", min_value=0.01, max_value=curr_qty, step=0.1)
+                if st.form_submit_button("Update", type="primary"):
                     if used > 0:
                         new_qty = curr_qty - used
                         df_idx = reagents_df[reagents_df["name"] == selected].index[0]
                         sheet_row = df_idx + 2
                         
-                        # IMPORTANT: adjust column letter for "quantity"
-                        qty_col_letter = "F"   # ← change this (A=id, B=name, C=cas, D=supplier, E=location, F=quantity)
-                        
+                        # ← IMPORTANT: change this to your actual quantity column letter
+                        qty_col_letter = "F"   # e.g. F if quantity is the 6th column (A=1, B=2, ..., F=6)
+
                         range_name = f"{WORKSHEET}!{qty_col_letter}{sheet_row}"
                         body = {"values": [[str(new_qty)]]}
                         
@@ -223,12 +218,12 @@ with tab_log:
                         except Exception as e:
                             st.error(f"Update failed: {str(e)}")
 
-# ── QR (placeholder) ────────────────────────────────────────────────────────
+# QR placeholder
 with tab_qr:
     st.header("QR Tools")
-    st.info("QR generation & scanning – coming soon")
+    st.info("Coming soon...")
 
-# ── Admin ───────────────────────────────────────────────────────────────────
+# Admin
 with tab_admin:
     if st.session_state.role != "admin":
         st.error("Admin access only", icon="🔒")
@@ -239,24 +234,19 @@ with tab_admin:
         col2.metric("Low stock", sum(1 for a in alerts if "Low Stock" in a))
         col3.metric("Expired", sum(1 for a in alerts if "Expired" in a))
 
+        # Bulk edit
         st.subheader("Bulk Edit")
         edited_df = st.data_editor(
             reagents_df,
             num_rows="dynamic",
             use_container_width=True,
-            hide_index=False,
-            column_config={
-                "quantity": st.column_config.NumberColumn(format="%.2f"),
-                "low_stock_threshold": st.column_config.NumberColumn(format="%.1f"),
-                "expiration_date": st.column_config.DateColumn()
-            }
+            hide_index=False
         )
 
-        if st.button("💾 Save All Changes", type="primary"):
+        if st.button("Save Changes", type="primary"):
             if edited_df.equals(reagents_df):
-                st.info("No changes detected.")
+                st.info("No changes.")
             else:
-                # Simple row-by-row update (not optimal for large tables)
                 for idx, row in edited_df.iterrows():
                     original = reagents_df.iloc[idx]
                     if not row.equals(original):
@@ -275,24 +265,21 @@ with tab_admin:
                                         body=body
                                     ).execute()
                                 except Exception as e:
-                                    st.error(f"Failed to update {col_name} in row {sheet_row}: {e}")
+                                    st.error(f"Update {col_name} failed: {e}")
                 st.success("Changes saved")
                 load_reagents.clear()
                 st.rerun()
 
-        st.subheader("Delete Reagents")
-        to_delete = st.multiselect("Select to delete", options=reagents_df["name"].tolist())
-        if st.button("🗑️ Delete Selected"):
+        # Delete
+        st.subheader("Delete")
+        to_delete = st.multiselect("Select to delete", reagents_df["name"].tolist())
+        if st.button("Delete Selected"):
             if not to_delete:
-                st.info("Nothing selected.")
+                st.info("No selection.")
             else:
-                rows_to_delete = []
                 for name in to_delete:
                     idx = reagents_df[reagents_df["name"] == name].index[0]
-                    rows_to_delete.append(idx + 1)  # 0-based in df → 1-based sheet rows (header=1)
-
-                # Delete from bottom to top to avoid index shifting
-                for sheet_row in sorted(rows_to_delete, reverse=True):
+                    sheet_row = idx + 2
                     try:
                         sheets_service.batchUpdate(
                             spreadsheetId=SPREADSHEET_ID,
@@ -300,7 +287,7 @@ with tab_admin:
                                 "requests": [{
                                     "deleteDimension": {
                                         "range": {
-                                            "sheetId": 0,  # ← change if your sheetId is different
+                                            "sheetId": 0,  # change if your sheet ID is different
                                             "dimension": "ROWS",
                                             "startIndex": sheet_row - 1,
                                             "endIndex": sheet_row
@@ -310,10 +297,9 @@ with tab_admin:
                             }
                         ).execute()
                     except Exception as e:
-                        st.error(f"Delete row {sheet_row} failed: {e}")
-                st.success(f"Deleted {len(to_delete)} reagent(s)")
+                        st.error(f"Delete {name} failed: {e}")
+                st.success(f"Deleted {len(to_delete)} items")
                 load_reagents.clear()
                 st.rerun()
 
 st.caption("Laboratory Reagent Inventory • January 2026")
-
