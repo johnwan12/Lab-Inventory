@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-creds = st.secrets["google_service_account"]
+creds = st.secrets[google_service_account]
 
 credentials = Credentials.from_service_account_info(
     creds,
@@ -318,6 +318,7 @@ with tab_admin:
                 st.rerun()
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
