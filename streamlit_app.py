@@ -3,6 +3,7 @@
 # Revised: January 2026
 
 import streamlit as st
+creds = st.secrets["google_service_account"]
 import pandas as pd
 from datetime import date
 import hashlib
@@ -310,3 +311,4 @@ with tab_admin:
                 st.rerun()
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
