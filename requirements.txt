@@ -4,6 +4,8 @@ google-api-python-client==2.111.0
 #google-auth==2.25.2
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.1
+GSheetsConnection
 #protobuf==4.25.3
 #grpcio==1.62.2
+
 
