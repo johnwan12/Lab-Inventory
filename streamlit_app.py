@@ -31,15 +31,32 @@ st.caption("Streamlit + Google Sheets API v4 • Production-safe CRUD")
 # Google Sheets init
 # ─────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Connecting to Google Sheets...")
-def get_sheets_service():
-    sa_info = st.secrets["google_service_account"]
-    creds = Credentials.from_service_account_info(
-        sa_info,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"]
-    )
-    service = build("sheets", "v4", credentials=creds).spreadsheets()
-    spreadsheet_id = st.secrets.connections.gsheets.spreadsheet
-    return service, spreadsheet_id
+# def get_sheets_service():
+#     sa_info = st.secrets["google_service_account"]
+#     creds = Credentials.from_service_account_info(
+#         sa_info,
+#         scopes=["https://www.googleapis.com/auth/spreadsheets"]
+#     )
+#     service = build("sheets", "v4", credentials=creds).spreadsheets()
+#     spreadsheet_id = st.secrets.connections.gsheets.spreadsheet
+#     return service, spreadsheet_id
+
+# 🔎 DEBUG: verify spreadsheet access
+try:
+    meta = sheets_service.get(spreadsheetId=SPREADSHEET_ID).execute()
+    st.success("✅ Spreadsheet access OK")
+
+    sheet_titles = [
+        s["properties"]["title"]
+        for s in meta["sheets"]
+    ]
+    st.write("Available worksheets:", sheet_titles)
+
+except Exception as e:
+    st.error("❌ Cannot access spreadsheet")
+    st.exception(e)
+    st.stop()
+
 
 
 @st.cache_resource
@@ -330,6 +347,7 @@ with tab_admin:
             st.rerun()
 
 st.caption("Laboratory Reagent Inventory • 2026")
+
 
 
 
