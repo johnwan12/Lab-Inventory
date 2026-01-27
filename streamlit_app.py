@@ -134,23 +134,37 @@ with tab_catalog:
     st.header("Reagent Catalog")
     search = st.text_input("Search", "")
 
+    # KEEP _row for edit/delete mapping
     df_view = reagents_df.copy()
+
+    # search only on visible columns, but don't remove _row
     if search and not df_view.empty:
-        mask = df_view.drop(columns=["_row"], errors="ignore").astype(str).apply(
-            lambda x: x.str.contains(search, case=False, na=False)
-        ).any(axis=1)
+        search_df = df_view.drop(columns=["_row"], errors="ignore").astype(str)
+        mask = search_df.apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
         df_view = df_view[mask].reset_index(drop=True)
 
     if df_view.empty:
         st.info("No matching reagents.")
     else:
-        st.subheader("Rows")
-        for i, r in df_view.iterrows():
-            rownum = int(r["_row"])
-            name = str(r.get("name", ""))
+        # (optional) show table WITHOUT _row
+        st.dataframe(
+            df_view.drop(columns=["_row"], errors="ignore").style.format(precision=2),
+            use_container_width=True,
+            hide_index=True
+        )
 
-            with st.expander(f"{name}  •  row {rownum}", expanded=False):
-                c1, c2 = st.columns([3, 1])
+        st.subheader("Row actions")
+        for _, r in df_view.iterrows():
+            rownum = int(r.get("_row", 0))
+            if rownum == 0:
+                st.error("Internal error: missing _row mapping. Ensure load_reagents() adds df['_row'].")
+                break
+
+            name = str(r.get("name", ""))
+            with st.expander(f"{name} • sheet row {rownum}", expanded=False):
+                # your edit + delete UI here
+                st.write("...")
+
 
                 # --- EDIT FORM ---
                 with c1:
@@ -227,5 +241,6 @@ with tab_catalog:
                         st.rerun()
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
