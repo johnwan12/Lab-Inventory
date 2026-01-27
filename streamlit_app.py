@@ -1,7 +1,10 @@
 # streamlit_app.py - Laboratory Reagent Inventory System
-# Single-file version (modules inlined)
-# Hardened multi-user + location dropdown + Slack/Email alerts
-# Revised: Jan 2026
+# Single-file version (no external modules)
+# Full CRUD using Google Sheets API v4
+# Hardened for multi-user labs (soft-lock + audit log)
+# Location dropdown + CustomEntry
+# Slack + Email alerts (optional)
+# Revised: January 2026
 
 import streamlit as st
 import pandas as pd
@@ -11,6 +14,7 @@ import json
 import urllib.request
 import smtplib
 from email.message import EmailMessage
+import time
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -18,9 +22,9 @@ from googleapiclient.discovery import build
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
-WORKSHEET_INVENTORY = "template"
-WORKSHEET_LOCKS = "locks"
-WORKSHEET_AUDIT = "audit_log"
+WORKSHEET_INVENTORY = "template"   # inventory tab name
+WORKSHEET_LOCKS = "locks"         # locks tab name (must exist)
+WORKSHEET_AUDIT = "audit_log"     # audit tab name (must exist)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -40,16 +44,34 @@ LOCATION_CHOICES = [
     "CustomEntry",
 ]
 
+READ_RANGE = f"{WORKSHEET_INVENTORY}!A1:Z5000"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # APP UI
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
-st.caption("Streamlit + Google Sheets API v4 • Hardened multi-user CRUD")
+st.caption("Streamlit + Google Sheets API v4 • Multi-user CRUD • Alerts")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
+def now_utc():
+    return datetime.now(timezone.utc)
+
+def with_retries(fn, tries=4, base_sleep=0.5):
+    last = None
+    for i in range(tries):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            time.sleep(base_sleep * (2 ** i))
+    raise last
+
+def safe_str(x) -> str:
+    return "" if x is None else str(x)
+
 def colnum_to_a1(n: int) -> str:
     s = ""
     while n > 0:
@@ -60,34 +82,20 @@ def colnum_to_a1(n: int) -> str:
 def build_header_map(headers: list[str]) -> dict[str, int]:
     return {h: i + 1 for i, h in enumerate(headers) if str(h).strip()}
 
-def with_retries(fn, tries=4, base_sleep=0.5):
-    last = None
-    for i in range(tries):
-        try:
-            return fn()
-        except Exception as e:
-            last = e
-            time_sleep = base_sleep * (2 ** i)
-            import time
-            time.sleep(time_sleep)
-    raise last
-
-def now_utc():
-    return datetime.now(timezone.utc)
-
-def safe_str(x) -> str:
-    return "" if x is None else str(x)
-
 def location_widget(label: str, value: str, key: str) -> str:
     default_idx = LOCATION_CHOICES.index(value) if value in LOCATION_CHOICES else LOCATION_CHOICES.index("CustomEntry")
     choice = st.selectbox(label, LOCATION_CHOICES, index=default_idx, key=f"{key}_choice")
     if choice == "CustomEntry":
-        custom = st.text_input("Custom location", value=value if value not in LOCATION_CHOICES else "", key=f"{key}_custom")
+        custom = st.text_input(
+            "Custom location",
+            value=value if value not in LOCATION_CHOICES else "",
+            key=f"{key}_custom"
+        )
         return custom.strip()
     return choice
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NOTIFY (Slack + Email)
+# NOTIFY (Slack + Email) — optional
 # ─────────────────────────────────────────────────────────────────────────────
 def send_slack(text: str):
     url = st.secrets.get("slack", {}).get("webhook_url", "")
@@ -142,7 +150,7 @@ def get_sheet_id_by_title(sheet_title: str) -> int:
         props = s.get("properties", {})
         if props.get("title") == sheet_title:
             return int(props.get("sheetId"))
-    raise ValueError(f"Sheet tab '{sheet_title}' not found.")
+    raise ValueError(f"Sheet tab '{sheet_title}' not found. Check WORKSHEET_* constants.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AUTH (demo)
@@ -180,10 +188,13 @@ if st.sidebar.button("🚪 Logout", use_container_width=True):
         st.session_state.pop(k, None)
     st.rerun()
 
-st.sidebar.success(f"Logged in as **{st.session_state.username}** ({st.session_state.role})", icon="👤")
+st.sidebar.success(
+    f"Logged in as **{st.session_state.username}** ({st.session_state.role})",
+    icon="👤"
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOCKS (soft-lock)
+# LOCKS (soft lock)
 # ─────────────────────────────────────────────────────────────────────────────
 def try_lock_row(rownum: int, user: str, purpose: str, lease_seconds=90) -> bool:
     rng = f"{WORKSHEET_LOCKS}!A1:D5000"
@@ -210,11 +221,13 @@ def try_lock_row(rownum: int, user: str, purpose: str, lease_seconds=90) -> bool
         try:
             locked_until_dt = datetime.fromisoformat(locked_until)
         except:
-            locked_until_dt = now - timedelta(days=1)
+            locked_until_dt = now - timedelta(days=365)
 
+        # Someone else holds a non-expired lock
         if locked_until_dt > now and locked_by and locked_by != user:
             return False
 
+    # Append a lock record
     with_retries(lambda: sheets.values().append(
         spreadsheetId=SPREADSHEET_ID,
         range=f"{WORKSHEET_LOCKS}!A1",
@@ -242,8 +255,11 @@ def audit(action: str, row: int, reagent_name: str, details: str):
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=120, show_spinner="Loading inventory...")
 def load_inventory():
-    rng = f"{WORKSHEET_INVENTORY}!A1:Z5000"
-    result = with_retries(lambda: sheets.values().get(spreadsheetId=SPREADSHEET_ID, range=rng).execute())
+    result = with_retries(lambda: sheets.values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range=READ_RANGE
+    ).execute())
+
     values = result.get("values", [])
     if not values:
         return pd.DataFrame(), {}, []
@@ -260,21 +276,29 @@ def load_inventory():
         norm.append(row[:len(headers)])
 
     df = pd.DataFrame(norm, columns=headers)
+
+    # Ensure expected columns exist
     for c in EXPECTED_COLS:
         if c not in df.columns:
             df[c] = ""
 
+    # Sheet row number mapping (row 1 is header)
     df["_row"] = [i + 2 for i in range(len(df))]
+
+    # Types
     df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0.0)
     df["low_stock_threshold"] = pd.to_numeric(df["low_stock_threshold"], errors="coerce").fillna(10.0)
+
+    # expiration_date becomes python date OR NaT; guard later with pd.notnull
     df["expiration_date"] = pd.to_datetime(df["expiration_date"], errors="coerce").dt.date
+
     df = df[EXPECTED_COLS + ["_row"]]
     return df, header_map, headers
 
 reagents_df, HEADER_MAP, RAW_HEADERS = load_inventory()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CRUD ops
+# CRUD OPS
 # ─────────────────────────────────────────────────────────────────────────────
 def update_row_cells(rownum: int, updates: dict):
     for col, val in updates.items():
@@ -316,26 +340,36 @@ def delete_row(rownum: int):
     ).execute())
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ALERTS
+# ALERTS (FIXED NaT comparisons)
 # ─────────────────────────────────────────────────────────────────────────────
-def build_alerts(df):
+def build_alerts(df: pd.DataFrame):
     low, expired = [], []
     today = date.today()
+
     if df.empty:
         return low, expired
+
     for _, row in df.iterrows():
         name = str(row.get("name", "") or "?")
         unit = str(row.get("unit", "") or "?")
         qty = float(row.get("quantity", 0) or 0)
         thresh = float(row.get("low_stock_threshold", 10) or 10)
+
         if qty <= thresh:
             low.append(f"{name}: {qty:.2f} {unit} (threshold {thresh:.2f})")
+
         exp = row.get("expiration_date")
-        if exp and exp < today:
-            expired.append(f"{name}: expired {exp}")
+
+        # ✅ Robust: handle NaT/NaN/None safely
+        if pd.notnull(exp):
+            exp_date = exp.date() if hasattr(exp, "date") else exp
+            if exp_date < today:
+                expired.append(f"{name}: expired {exp_date}")
+
     return low, expired
 
 low_alerts, expired_alerts = build_alerts(reagents_df)
+
 if low_alerts or expired_alerts:
     parts = []
     if low_alerts:
@@ -349,6 +383,7 @@ if low_alerts or expired_alerts:
 # ─────────────────────────────────────────────────────────────────────────────
 tab_catalog, tab_add, tab_admin = st.tabs(["📋 Catalog", "➕ Add", "🛠 Admin"])
 
+# ── Catalog ─────────────────────────────────────────────────────────────────
 with tab_catalog:
     st.header("Reagent Catalog")
     search = st.text_input("Search", "")
@@ -362,7 +397,11 @@ with tab_catalog:
     if df_view.empty:
         st.info("No matching reagents.")
     else:
-        st.dataframe(df_view.drop(columns=["_row"], errors="ignore"), use_container_width=True, hide_index=True)
+        st.dataframe(
+            df_view.drop(columns=["_row"], errors="ignore"),
+            use_container_width=True,
+            hide_index=True
+        )
 
         st.subheader("Row actions (Edit / Delete)")
         for _, r in df_view.iterrows():
@@ -381,14 +420,28 @@ with tab_catalog:
 
                         loc2 = location_widget("Location", value=str(r.get("location", "")), key=f"loc_{rownum}")
 
-                        qty2 = st.number_input("Quantity", min_value=0.0, value=float(r.get("quantity", 0.0) or 0.0), step=0.1)
+                        qty2 = st.number_input(
+                            "Quantity",
+                            min_value=0.0,
+                            value=float(r.get("quantity", 0.0) or 0.0),
+                            step=0.1
+                        )
                         unit2 = st.text_input("Unit", value=str(r.get("unit", "")))
 
                         exp_val = r.get("expiration_date")
                         has_exp = st.checkbox("Has expiration date", value=pd.notnull(exp_val), key=f"hasexp_{rownum}")
-                        exp2 = st.date_input("Expiration date", value=exp_val if pd.notnull(exp_val) else date.today(), key=f"exp_{rownum}") if has_exp else None
+                        exp2 = st.date_input(
+                            "Expiration date",
+                            value=(exp_val if pd.notnull(exp_val) else date.today()),
+                            key=f"exp_{rownum}"
+                        ) if has_exp else None
 
-                        low2 = st.number_input("Low stock threshold", min_value=0.0, value=float(r.get("low_stock_threshold", 10.0) or 10.0), step=1.0)
+                        low2 = st.number_input(
+                            "Low stock threshold",
+                            min_value=0.0,
+                            value=float(r.get("low_stock_threshold", 10.0) or 10.0),
+                            step=1.0
+                        )
 
                         if st.form_submit_button("💾 Save row", type="primary"):
                             if not try_lock_row(rownum, st.session_state.username, "edit"):
@@ -405,6 +458,7 @@ with tab_catalog:
                                 "expiration_date": exp2.isoformat() if exp2 else "",
                                 "low_stock_threshold": str(low2),
                             }
+
                             update_row_cells(rownum, updates)
                             audit("UPDATE", rownum, name2, json.dumps(updates, ensure_ascii=False))
 
@@ -425,10 +479,12 @@ with tab_catalog:
 
                             delete_row(rownum)
                             audit("DELETE", rownum, name, "deleted row")
+
                             st.success("Row deleted.")
                             load_inventory.clear()
                             st.rerun()
 
+# ── Add ─────────────────────────────────────────────────────────────────────
 with tab_add:
     st.header("Add New Reagent")
     with st.form("add_form"):
@@ -463,14 +519,18 @@ with tab_add:
                 "expiration_date": new_exp.isoformat() if new_exp else "",
                 "low_stock_threshold": str(new_low),
             }
+
             append_row(payload)
             audit("CREATE", 0, new_name, json.dumps(payload, ensure_ascii=False))
+
             st.success("Reagent added.")
             load_inventory.clear()
             st.rerun()
 
+# ── Admin ───────────────────────────────────────────────────────────────────
 with tab_admin:
     st.header("Admin")
+
     if st.session_state.role != "admin":
         st.info("Admin only")
     else:
@@ -482,9 +542,18 @@ with tab_admin:
             if expired_alerts:
                 lines.append("EXPIRED:\n" + "\n".join(expired_alerts))
             msg = "\n\n".join(lines) if lines else "No alerts."
-            send_slack(msg)
-            send_email("Lab Inventory Alerts", msg)
-            st.success("Sent (if configured).")
+
+            try:
+                send_slack(msg)
+            except Exception as e:
+                st.warning(f"Slack not sent: {e}")
+
+            try:
+                send_email("Lab Inventory Alerts", msg)
+            except Exception as e:
+                st.warning(f"Email not sent: {e}")
+
+            st.success("Done (sent if configured).")
 
         st.subheader("Secrets check")
         st.write("Has Slack webhook:", bool(st.secrets.get("slack", {}).get("webhook_url")))
