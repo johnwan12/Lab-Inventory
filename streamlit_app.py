@@ -8,9 +8,9 @@ import streamlit as st
 # st.write("DEBUG secrets keys:", list(st.secrets.keys()))
 # st.stop()
 
-st.write("Secrets keys:", list(st.secrets.keys()))
-st.write("SA keys:", list(st.secrets["google_service_account"].keys()))
-st.stop()
+# st.write("Secrets keys:", list(st.secrets.keys()))
+# st.write("SA keys:", list(st.secrets["google_service_account"].keys()))
+# st.stop()
 
 import pandas as pd
 from datetime import date
@@ -347,6 +347,7 @@ with tab_admin:
             st.rerun()
 
 st.caption("Laboratory Reagent Inventory • 2026")
+
 
 
 
