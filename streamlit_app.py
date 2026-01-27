@@ -5,8 +5,8 @@
 import streamlit as st
 
 import streamlit as st
-st.write("DEBUG secrets keys:", list(st.secrets.keys()))
-st.stop()
+# st.write("DEBUG secrets keys:", list(st.secrets.keys()))
+# st.stop()
 
 import pandas as pd
 from datetime import date
@@ -326,4 +326,5 @@ with tab_admin:
             st.rerun()
 
 st.caption("Laboratory Reagent Inventory • 2026")
+
 
