@@ -9,3 +9,10 @@ google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.1
 protobuf==4.25.3
 
+streamlit-gsheets
+#google-api-python-client
+#google-auth
+#pandas
+
+
+
