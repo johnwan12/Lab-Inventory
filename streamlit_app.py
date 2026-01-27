@@ -127,6 +127,9 @@ if alerts:
     st.warning("\n".join(alerts), icon="🚨")
 
 # ── Tabs ────────────────────────────────────────────────────────────────────
+tab_catalog, tab_add, tab_log, tab_qr, tab_admin = st.tabs([
+    "📋 Catalog", "➕ Add", "📉 Log Usage", "🔲 QR", "🛠 Admin"
+])
 with tab_catalog:
     st.header("Reagent Catalog")
     search = st.text_input("Search", "")
@@ -224,4 +227,5 @@ with tab_catalog:
                         st.rerun()
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
