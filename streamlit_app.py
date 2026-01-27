@@ -127,186 +127,101 @@ if alerts:
     st.warning("\n".join(alerts), icon="🚨")
 
 # ── Tabs ────────────────────────────────────────────────────────────────────
-tab_catalog, tab_add, tab_log, tab_qr, tab_admin = st.tabs([
-    "📋 Catalog", "➕ Add", "📉 Log Usage", "🔲 QR", "🛠 Admin"
-])
-
 with tab_catalog:
     st.header("Reagent Catalog")
     search = st.text_input("Search", "")
-    df_view = reagents_df
-    if search:
-        mask = df_view.astype(str).apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
-        df_view = df_view[mask]
+
+    df_view = reagents_df.copy()
+    if search and not df_view.empty:
+        mask = df_view.drop(columns=["_row"], errors="ignore").astype(str).apply(
+            lambda x: x.str.contains(search, case=False, na=False)
+        ).any(axis=1)
+        df_view = df_view[mask].reset_index(drop=True)
+
     if df_view.empty:
         st.info("No matching reagents.")
     else:
-        st.dataframe(df_view.style.format(precision=2), use_container_width=True, hide_index=True)
+        st.subheader("Rows")
+        for i, r in df_view.iterrows():
+            rownum = int(r["_row"])
+            name = str(r.get("name", ""))
 
-with tab_add:
-    st.header("Add New Reagent")
-    
-    with st.form("add_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            name = st.text_input("Name *")
-            cas_number = st.text_input("CAS Number")
-            supplier = st.text_input("Supplier")
-            location = st.text_input("Location")
-        with col2:
-            quantity = st.number_input("Initial Quantity *", min_value=0.0, value=100.0, step=0.1)
-            unit = st.selectbox("Unit", ["g", "mg", "L", "mL", "kg", "pcs", "bottles"])
-            exp_date = st.date_input("Expiration Date", value=None)
-            low_stock_threshold = st.number_input("Low Stock Threshold", min_value=0.0, value=10.0, step=1.0)
+            with st.expander(f"{name}  •  row {rownum}", expanded=False):
+                c1, c2 = st.columns([3, 1])
 
-        submitted = st.form_submit_button("➕ Add", type="primary", use_container_width=True)
+                # --- EDIT FORM ---
+                with c1:
+                    with st.form(f"edit_{rownum}"):
+                        name2 = st.text_input("name", value=str(r.get("name", "")))
+                        cas2 = st.text_input("cas_number", value=str(r.get("cas_number", "")))
+                        sup2 = st.text_input("supplier", value=str(r.get("supplier", "")))
+                        loc2 = st.text_input("location", value=str(r.get("location", "")))
 
-        if submitted:
-            if not name.strip():
-                st.error("Reagent name is required.")
-            else:
-                row = [
-                    "", name.strip(), cas_number.strip() or "", supplier.strip() or "",
-                    location.strip() or "", str(quantity), unit,
-                    exp_date.strftime("%Y-%m-%d") if exp_date else "",
-                    str(low_stock_threshold)
-                ]
-                body = {"values": [row]}
-                try:
-                    sheets_service.values().append(
-                        spreadsheetId=SPREADSHEET_ID,
-                        range=f"{WORKSHEET}!A:A",
-                        valueInputOption="RAW",
-                        insertDataOption="INSERT_ROWS",
-                        body=body
-                    ).execute()
-                    st.success(f"Added **{name}**")
-                    load_reagents.clear()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Add failed: {str(e)}")
+                        qty2 = st.number_input("quantity", min_value=0.0, value=float(r.get("quantity", 0.0)), step=0.1)
+                        unit2 = st.text_input("unit", value=str(r.get("unit", "")))
 
-with tab_log:
-    st.header("Log Usage")
-    if reagents_df.empty:
-        st.info("No reagents loaded yet.")
-    else:
-        selected_name = st.selectbox("Select Reagent", options=[""] + reagents_df["name"].tolist())
-        if selected_name:
-            row = reagents_df[reagents_df["name"] == selected_name].iloc[0]
-            curr_qty = float(row.get("quantity", 0))
-            unit = row.get("unit", "?")
-            st.metric("Current Stock", f"{curr_qty:.2f} {unit}")
+                        exp_val = r.get("expiration_date", None)
+                        has_exp = st.checkbox("has expiration date", value=bool(pd.notnull(exp_val)), key=f"hasexp_{rownum}")
+                        exp2 = st.date_input("expiration_date", value=exp_val if has_exp and pd.notnull(exp_val) else date.today(), key=f"exp_{rownum}") if has_exp else None
 
-            with st.form("log_form"):
-                used_qty = st.number_input("Amount used", min_value=0.01, max_value=curr_qty, step=0.1, format="%.2f")
-                submitted = st.form_submit_button("📉 Update", type="primary")
+                        low2 = st.number_input("low_stock_threshold", min_value=0.0, value=float(r.get("low_stock_threshold", 10.0)), step=1.0)
 
-                if submitted:
-                    new_qty = curr_qty - used_qty
-                    df_idx = reagents_df[reagents_df["name"] == selected_name].index[0]
-                    sheet_row = df_idx + 2
-                    
-                    # ← IMPORTANT: change this to match your sheet structure
-                    # A=1=id, B=2=name, C=3=cas_number, D=4=supplier, E=5=location, F=6=quantity
-                    qty_col_letter = "F"
-                    
-                    range_name = f"{WORKSHEET}!{qty_col_letter}{sheet_row}"
-                    body = {"values": [[str(new_qty)]]}
-                    
-                    try:
-                        sheets_service.values().update(
-                            spreadsheetId=SPREADSHEET_ID,
-                            range=range_name,
-                            valueInputOption="RAW",
-                            body=body
-                        ).execute()
-                        st.success(f"Updated to **{new_qty:.2f} {unit}**")
-                        load_reagents.clear()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Update failed: {str(e)}")
+                        save = st.form_submit_button("💾 Save row", type="primary")
 
-with tab_qr:
-    st.header("QR Tools")
-    st.info("Coming soon...")
+                        if save:
+                            updates = {
+                                "name": name2.strip(),
+                                "cas_number": cas2.strip(),
+                                "supplier": sup2.strip(),
+                                "location": loc2.strip(),
+                                "quantity": str(qty2),
+                                "unit": unit2.strip(),
+                                "expiration_date": exp2.isoformat() if exp2 else "",
+                                "low_stock_threshold": str(low2),
+                            }
 
-with tab_admin:
-    if st.session_state.role != "admin":
-        st.error("Admin access only", icon="🔒")
-    else:
-        st.header("Admin Dashboard")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Reagents", len(reagents_df))
-        col2.metric("Low Stock", sum(1 for a in alerts if "Low Stock" in a))
-        col3.metric("Expired", sum(1 for a in alerts if "Expired" in a))
+                            # write changed fields only
+                            for col, val in updates.items():
+                                if col not in HEADER_MAP:
+                                    continue
+                                col_letter = colnum_to_a1(HEADER_MAP[col])
+                                range_name = f"{WORKSHEET}!{col_letter}{rownum}"
+                                sheets.values().update(
+                                    spreadsheetId=SPREADSHEET_ID,
+                                    range=range_name,
+                                    valueInputOption="RAW",
+                                    body={"values": [[val]]},
+                                ).execute()
 
-        # Bulk edit
-        st.subheader("Bulk Edit")
-        edited_df = st.data_editor(
-            reagents_df,
-            num_rows="dynamic",
-            use_container_width=True,
-            hide_index=False
-        )
+                            st.success("Row saved.")
+                            load_reagents.clear()
+                            st.rerun()
 
-        if st.button("💾 Save Changes", type="primary"):
-            if edited_df.equals(reagents_df):
-                st.info("No changes detected.")
-            else:
-                for idx, row in edited_df.iterrows():
-                    original = reagents_df.iloc[idx]
-                    if not row.equals(original):
-                        sheet_row = idx + 2
-                        for col_name, new_val in row.items():
-                            if pd.notna(new_val) and new_val != original[col_name]:
-                                col_idx = edited_df.columns.get_loc(col_name)
-                                col_letter = chr(65 + col_idx)
-                                range_name = f"{WORKSHEET}!{col_letter}{sheet_row}"
-                                body = {"values": [[str(new_val)]]}
-                                try:
-                                    sheets_service.values().update(
-                                        spreadsheetId=SPREADSHEET_ID,
-                                        range=range_name,
-                                        valueInputOption="RAW",
-                                        body=body
-                                    ).execute()
-                                except Exception as e:
-                                    st.error(f"Update {col_name} failed: {e}")
-                st.success("Changes saved")
-                load_reagents.clear()
-                st.rerun()
-
-        # Delete
-        st.subheader("Delete Reagents")
-        to_delete = st.multiselect("Select reagents to delete", options=reagents_df["name"].tolist())
-        if st.button("🗑️ Delete Selected"):
-            if not to_delete:
-                st.info("No selection.")
-            else:
-                for name in to_delete:
-                    idx = reagents_df[reagents_df["name"] == name].index[0]
-                    sheet_row = idx + 2
-                    try:
-                        sheets_service.batchUpdate(
+                # --- DELETE BUTTON ---
+                with c2:
+                    st.write("")
+                    st.write("")
+                    if st.button("🗑️ Delete row", key=f"del_{rownum}"):
+                        sheet_id = get_sheet_id_by_title(WORKSHEET)
+                        sheets.batchUpdate(
                             spreadsheetId=SPREADSHEET_ID,
                             body={
                                 "requests": [{
                                     "deleteDimension": {
                                         "range": {
-                                            "sheetId": 0,  # ← change if your sheetId is different
+                                            "sheetId": sheet_id,
                                             "dimension": "ROWS",
-                                            "startIndex": sheet_row - 1,
-                                            "endIndex": sheet_row
+                                            "startIndex": rownum - 1,
+                                            "endIndex": rownum
                                         }
                                     }
                                 }]
                             }
                         ).execute()
-                    except Exception as e:
-                        st.error(f"Delete {name} failed: {e}")
-                st.success(f"Deleted {len(to_delete)} reagent(s)")
-                load_reagents.clear()
-                st.rerun()
+
+                        st.success("Row deleted.")
+                        load_reagents.clear()
+                        st.rerun()
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
