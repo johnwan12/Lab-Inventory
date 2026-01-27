@@ -704,6 +704,8 @@ with tab_scan:
             "You can still capture/upload and manually fill fields below.",
             icon="⚠️"
         )
+st.write("Streamlit:", st.__version__)
+st.write("Cloud OCR configured:", vision_available())
 
     # Big buttons for phone scanning
     st.markdown("### Step 1 — Capture / Upload")
@@ -882,3 +884,4 @@ with tab_admin:
     )
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
