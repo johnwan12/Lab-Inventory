@@ -119,6 +119,9 @@ def load_reagents():
 
 
 # ── Alerts ──────────────────────────────────────────────────────────────────
+reagents_df = pd.DataFrame()  # ✅ placeholder so later code won't NameError
+reagents_df = load_reagents()
+
 alerts = []
 today = date.today()
 
@@ -253,6 +256,7 @@ with tab_catalog:
                         st.rerun()
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
