@@ -3,8 +3,8 @@
 # Full CRUD using Google Sheets API v4
 # Multi-user hardening: soft-lock + audit log (optional sheets)
 # Location dropdown + CustomEntry
-# Scan & Add: Camera + Bulletproof Uploader (HEIC/HEIF supported as upload types; preview may require JPG/PNG)
-# OCR: Optional. If OCR libs not available, the scan step will still capture+preview and you can type fields manually.
+# Scan & Add: Camera + Bulletproof Uploader (stores bytes in session_state)
+# OCR: Cloud OCR-ready hooks + local parser; preview is Streamlit-version-safe
 # Slack + Email alerts (optional)
 # Revised: January 2026
 
@@ -19,28 +19,27 @@ from email.message import EmailMessage
 import time
 import re
 import io
+import base64
+
+import requests
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
-# OCR optional (Streamlit Cloud may not have tesseract binary / libs)
-OCR_AVAILABLE = True
+# Pillow optional (preview + optional local crop; OCR can be cloud)
+PIL_AVAILABLE = True
 try:
-    from PIL import Image, ImageOps, ImageEnhance
-    import pytesseract
+    from PIL import Image
 except Exception:
-    OCR_AVAILABLE = False
-    try:
-        from PIL import Image  # at least for preview
-    except Exception:
-        Image = None
+    PIL_AVAILABLE = False
+    Image = None
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 WORKSHEET_INVENTORY = "template"   # inventory tab name
-WORKSHEET_LOCKS = "locks"         # optional locks tab
-WORKSHEET_AUDIT = "audit_log"     # optional audit tab
+WORKSHEET_LOCKS = "locks"         # optional locks tab (recommended)
+WORKSHEET_AUDIT = "audit_log"     # optional audit tab (recommended)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -67,7 +66,24 @@ READ_RANGE = f"{WORKSHEET_INVENTORY}!A1:Z5000"
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
-st.caption("Streamlit + Google Sheets API v4 • Multi-user CRUD • Camera/Upload scan")
+st.caption("Streamlit + Google Sheets API v4 • Multi-user CRUD • Mobile Scan & Add")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STREAMLIT VERSION SAFE UI HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+def st_image_safe(img, caption=None):
+    """Works on old and new Streamlit (use_container_width vs use_column_width)."""
+    try:
+        st.image(img, caption=caption, use_container_width=True)
+    except TypeError:
+        st.image(img, caption=caption, use_column_width=True)
+
+def st_dataframe_safe(df, **kwargs):
+    """Works on old and new Streamlit (use_container_width vs use_column_width)."""
+    try:
+        st.dataframe(df, use_container_width=True, **kwargs)
+    except TypeError:
+        st.dataframe(df, use_column_width=True, **kwargs)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
@@ -111,19 +127,94 @@ def location_widget(label: str, value: str, key: str) -> str:
     return choice
 
 # ─────────────────────────────────────────────────────────────────────────────
-# OPTIONAL OCR + PARSING
+# CLOUD OCR (Google Vision) - optional usage
 # ─────────────────────────────────────────────────────────────────────────────
-def ocr_image_to_text(img):
-    """Return OCR text from a PIL image. Requires pytesseract + tesseract binary."""
-    if not OCR_AVAILABLE:
-        raise RuntimeError("OCR is not available in this environment (missing Pillow/pytesseract/tesseract).")
-    img = ImageOps.exif_transpose(img)
-    gray = ImageOps.grayscale(img)
-    gray = ImageEnhance.Contrast(gray).enhance(2.0)
-    gray = ImageEnhance.Sharpness(gray).enhance(2.0)
-    config = "--psm 6"
-    return pytesseract.image_to_string(gray, config=config)
+def vision_available() -> bool:
+    return bool(st.secrets.get("gcp_vision", {}).get("api_key", ""))
 
+def vision_text_detection(image_bytes: bytes) -> dict:
+    """Google Vision TEXT_DETECTION using API key in secrets: [gcp_vision] api_key=..."""
+    api_key = st.secrets["gcp_vision"]["api_key"]
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    url = f"https://vision.googleapis.com/v1/images:annotate?key={api_key}"
+    payload = {
+        "requests": [{
+            "image": {"content": b64},
+            "features": [{"type": "TEXT_DETECTION"}]
+        }]
+    }
+    r = requests.post(url, json=payload, timeout=25)
+    r.raise_for_status()
+    return r.json()
+
+def vision_extract_full_text(resp_json: dict) -> str:
+    try:
+        ann = resp_json["responses"][0].get("textAnnotations", [])
+        return ann[0]["description"] if ann else ""
+    except Exception:
+        return ""
+
+def vision_compute_text_bbox(resp_json: dict):
+    """
+    Compute bbox around detected word boxes (excludes full-page annotation).
+    Returns (min_x, min_y, max_x, max_y) or None.
+    """
+    try:
+        ann = resp_json["responses"][0].get("textAnnotations", [])
+        if len(ann) <= 1:
+            return None
+        xs, ys = [], []
+        for a in ann[1:]:
+            poly = a.get("boundingPoly", {}).get("vertices", [])
+            for v in poly:
+                if "x" in v and "y" in v:
+                    xs.append(int(v["x"]))
+                    ys.append(int(v["y"]))
+        if not xs or not ys:
+            return None
+        return (min(xs), min(ys), max(xs), max(ys))
+    except Exception:
+        return None
+
+def autocrop_bytes_using_vision(image_bytes: bytes, margin_ratio: float = 0.06) -> bytes:
+    """
+    Auto-crop based on Vision bbox. Requires Pillow for actual crop.
+    If Pillow not available or bbox not found, returns original bytes.
+    """
+    if not (PIL_AVAILABLE and vision_available()):
+        return image_bytes
+
+    resp = vision_text_detection(image_bytes)
+    bbox = vision_compute_text_bbox(resp)
+    if not bbox:
+        return image_bytes
+
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        w, h = img.size
+        x0, y0, x1, y1 = bbox
+
+        mx = int(w * margin_ratio)
+        my = int(h * margin_ratio)
+
+        x0 = max(0, x0 - mx)
+        y0 = max(0, y0 - my)
+        x1 = min(w, x1 + mx)
+        y1 = min(h, y1 + my)
+
+        if x1 - x0 < 40 or y1 - y0 < 40:
+            return image_bytes
+
+        cropped = img.crop((x0, y0, x1, y1))
+        out = io.BytesIO()
+        cropped.save(out, format="PNG")
+        return out.getvalue()
+    except Exception:
+        return image_bytes
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PARSING (CAS, supplier, expiration; missing => N/A)
+# ─────────────────────────────────────────────────────────────────────────────
 def _find_first(patterns, text, flags=re.IGNORECASE):
     for p in patterns:
         m = re.search(p, text, flags)
@@ -132,11 +223,7 @@ def _find_first(patterns, text, flags=re.IGNORECASE):
     return None
 
 def parse_reagent_fields(text: str) -> dict:
-    """
-    OCR → reagent fields.
-    Missing values returned as 'N/A'.
-    Uses cas_number (no catalog_number).
-    """
+    """Best-effort parser; fills missing values with N/A. Uses cas_number only."""
     t = " ".join(text.split())
 
     cas = _find_first(
@@ -168,7 +255,6 @@ def parse_reagent_fields(text: str) -> dict:
         if pd.notnull(dt):
             exp_iso = dt.date().isoformat()
 
-    # Name guess: first long-ish non-code line
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     name_guess = "N/A"
     for ln in lines[:10]:
@@ -358,11 +444,7 @@ def audit(action: str, row: int, reagent_name: str, details: str):
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=120, show_spinner="Loading inventory...")
 def load_inventory():
-    result = with_retries(lambda: sheets.values().get(
-        spreadsheetId=SPREADSHEET_ID,
-        range=READ_RANGE
-    ).execute())
-
+    result = with_retries(lambda: sheets.values().get(spreadsheetId=SPREADSHEET_ID, range=READ_RANGE).execute())
     values = result.get("values", [])
     if not values:
         return pd.DataFrame(), {}, []
@@ -385,7 +467,6 @@ def load_inventory():
             df[c] = ""
 
     df["_row"] = [i + 2 for i in range(len(df))]
-
     df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0.0)
     df["low_stock_threshold"] = pd.to_numeric(df["low_stock_threshold"], errors="coerce").fillna(10.0)
     df["expiration_date"] = pd.to_datetime(df["expiration_date"], errors="coerce").dt.date
@@ -464,7 +545,6 @@ def build_alerts(df: pd.DataFrame):
     return low, expired
 
 low_alerts, expired_alerts = build_alerts(reagents_df)
-
 if low_alerts or expired_alerts:
     parts = []
     if low_alerts:
@@ -474,7 +554,7 @@ if low_alerts or expired_alerts:
     st.warning("\n\n".join(parts), icon="🚨")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SCAN IMAGE STORAGE (prevents uploader/camera from "disappearing" on rerun)
+# SCAN IMAGE STORAGE (prevents uploader/camera from disappearing on rerun)
 # ─────────────────────────────────────────────────────────────────────────────
 def set_scan_image_bytes(b: bytes, source: str, meta: dict):
     st.session_state["scan_image_bytes"] = b
@@ -487,7 +567,7 @@ def clear_scan_image_bytes():
     st.session_state.pop("scan_image_meta", None)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# UI TABS
+# TABS
 # ─────────────────────────────────────────────────────────────────────────────
 tab_catalog, tab_add, tab_scan, tab_admin = st.tabs(["📋 Catalog", "➕ Add", "📷 Scan & Add", "🛠 Admin"])
 
@@ -505,7 +585,7 @@ with tab_catalog:
     if df_view.empty:
         st.info("No matching reagents.")
     else:
-        st.dataframe(df_view.drop(columns=["_row"], errors="ignore"), use_container_width=True, hide_index=True)
+        st_dataframe_safe(df_view.drop(columns=["_row"], errors="ignore"), hide_index=True)
 
         st.subheader("Row actions (Edit / Delete)")
         for _, r in df_view.iterrows():
@@ -515,15 +595,12 @@ with tab_catalog:
             with st.expander(f"{name} • sheet row {rownum}", expanded=False):
                 cols = st.columns([3, 1])
 
-                # EDIT
                 with cols[0]:
                     with st.form(f"edit_{rownum}"):
                         name2 = st.text_input("Name", value=str(r.get("name", "")))
                         cas2 = st.text_input("CAS Number", value=str(r.get("cas_number", "")))
                         sup2 = st.text_input("Supplier", value=str(r.get("supplier", "")))
-
                         loc2 = location_widget("Location", value=str(r.get("location", "")), key=f"loc_{rownum}")
-
                         qty2 = st.number_input("Quantity", min_value=0.0, value=float(r.get("quantity", 0.0) or 0.0), step=0.1)
                         unit2 = st.text_input("Unit", value=str(r.get("unit", "")))
 
@@ -552,15 +629,12 @@ with tab_catalog:
                                 "expiration_date": (exp2.isoformat() if exp2 else "N/A"),
                                 "low_stock_threshold": str(low2),
                             }
-
                             update_row_cells(rownum, updates)
                             audit("UPDATE", rownum, NA(name2), json.dumps(updates, ensure_ascii=False))
-
                             st.success("Row updated.")
                             load_inventory.clear()
                             st.rerun()
 
-                # DELETE (admin only)
                 with cols[1]:
                     if st.session_state.role != "admin":
                         st.info("Delete: admin only")
@@ -573,7 +647,6 @@ with tab_catalog:
 
                             delete_row(rownum)
                             audit("DELETE", rownum, name, "deleted row")
-
                             st.success("Row deleted.")
                             load_inventory.clear()
                             st.rerun()
@@ -613,43 +686,48 @@ with tab_add:
                 "expiration_date": (new_exp.isoformat() if new_exp else "N/A"),
                 "low_stock_threshold": str(new_low),
             }
-
             append_row(payload)
             audit("CREATE", 0, payload["name"], json.dumps(payload, ensure_ascii=False))
-
             st.success("Reagent added.")
             load_inventory.clear()
             st.rerun()
 
 # ── Scan & Add ──────────────────────────────────────────────────────────────
 with tab_scan:
-    st.header("📷 Scan & Add (Camera or Upload)")
-    st.write(
-        "If uploader fails on phone: open this app in Safari/Chrome (not inside an in-app browser), "
-        "and consider iPhone Camera → Formats → **Most Compatible** (JPG)."
-    )
+    st.header("📷 Scan & Add (Mobile-first)")
+    st.write("Step 1: Take a photo (recommended) or upload. Step 2: OCR (cloud) → auto-fill. Step 3: Add.")
 
-    # Camera capture first (often more reliable on phones)
-    cam = st.camera_input("Take a photo of the reagent label (recommended)", key="scan_cam")
+    if not vision_available():
+        st.warning(
+            "Cloud OCR is not configured. Add to Streamlit Secrets:\n\n"
+            "[gcp_vision]\napi_key = \"YOUR_GOOGLE_VISION_API_KEY\"\n\n"
+            "You can still capture/upload and manually fill fields below.",
+            icon="⚠️"
+        )
+
+    # Big buttons for phone scanning
+    st.markdown("### Step 1 — Capture / Upload")
+
+    cam = st.camera_input("📸 Take a photo of the label (best on phone)", key="scan_cam")
     if cam is not None:
+        b = cam.getvalue()
         set_scan_image_bytes(
-            cam.getvalue(),
+            b,
             source="camera",
-            meta={"filename": "camera.jpg", "mime_type": cam.type, "size_bytes": len(cam.getvalue())}
+            meta={"filename": "camera.jpg", "mime_type": getattr(cam, "type", "image/jpeg"), "size_bytes": len(b)}
         )
         st.success("Camera image captured ✅ (stored for this session)")
 
-    # Bulletproof uploader: store bytes in session_state
     up = st.file_uploader(
-        "Or upload a photo (JPG/PNG recommended; HEIC/HEIF may not preview)",
+        "⬆️ Or upload a photo (JPG/PNG recommended)",
         type=["jpg", "jpeg", "png", "heic", "heif"],
         accept_multiple_files=False,
         key="scan_uploader",
     )
-
     if up is not None:
+        b = up.getvalue()
         set_scan_image_bytes(
-            up.getvalue(),
+            b,
             source="upload",
             meta={"filename": up.name, "mime_type": up.type, "size_bytes": up.size}
         )
@@ -657,41 +735,58 @@ with tab_scan:
         st.write(st.session_state.get("scan_image_meta"))
 
     image_bytes = st.session_state.get("scan_image_bytes")
+
     if image_bytes:
-        st.subheader("Preview")
-        if Image is None:
-            st.error("Pillow is not available, cannot preview images.")
-        else:
+        st.markdown("### Preview")
+        if PIL_AVAILABLE:
             try:
                 img = Image.open(io.BytesIO(image_bytes))
-                st.image(img, caption=f"Source: {st.session_state.get('scan_image_source','?')}", use_container_width=True)
+                st_image_safe(img, caption=f"Source: {st.session_state.get('scan_image_source','?')}")
             except Exception as e:
-                st.error(
-                    f"Cannot open image for preview. This often happens with HEIC/HEIF on Streamlit Cloud.\n\n"
-                    f"Fix: use JPG/PNG (iPhone: Settings → Camera → Formats → Most Compatible).\n\n"
-                    f"Error: {e}"
-                )
+                st.error(f"Cannot open image for preview (preview only). Error: {e}")
+        else:
+            st.info("Pillow not available → skipping preview (OCR can still run).")
 
-        # OCR (optional)
-        if st.button("🔎 OCR Scan (optional)", type="primary", disabled=(not OCR_AVAILABLE or Image is None)):
+        st.markdown("### Step 2 — OCR (Cloud)")
+
+        cols = st.columns([1, 1])
+        with cols[0]:
+            auto_crop = st.checkbox("🧪 Auto-crop label before OCR (improves accuracy)", value=True, disabled=(not PIL_AVAILABLE or not vision_available()))
+        with cols[1]:
+            show_ocr = st.checkbox("Show OCR text (debug)", value=False)
+
+        if st.button("🔎 Run Cloud OCR", type="primary", use_container_width=True, disabled=not vision_available()):
             try:
-                img2 = Image.open(io.BytesIO(image_bytes))
-                with st.spinner("Running OCR..."):
-                    text = ocr_image_to_text(img2)
-                st.text_area("OCR output (debug)", text, height=180)
-                fields = parse_reagent_fields(text)
-                st.session_state["scan_fields"] = fields
-                st.success('OCR done. Review below; missing values are set to "N/A".')
+                with st.spinner("Running Vision OCR..."):
+                    bytes_for_ocr = autocrop_bytes_using_vision(image_bytes) if auto_crop else image_bytes
+                    resp = vision_text_detection(bytes_for_ocr)
+                    text = vision_extract_full_text(resp)
+
+                st.session_state["ocr_text"] = text
+                st.session_state["scan_fields"] = parse_reagent_fields(text)
+                st.success('OCR complete. Review fields below (missing values are "N/A").')
+
+                # If we cropped and can preview, show cropped preview
+                if auto_crop and PIL_AVAILABLE and bytes_for_ocr != image_bytes:
+                    try:
+                        img2 = Image.open(io.BytesIO(bytes_for_ocr))
+                        st_image_safe(img2, caption="Auto-cropped image used for OCR")
+                    except Exception:
+                        pass
+
+                if show_ocr:
+                    st.text_area("OCR output", text, height=200)
+
             except Exception as e:
                 st.error(f"OCR failed: {e}")
 
-        # If OCR not available, allow manual entry but auto-fill N/A
+        st.markdown("### Step 3 — Review & Add")
+
         fields = st.session_state.get("scan_fields") or {
             "id": "N/A", "name": "N/A", "cas_number": "N/A", "supplier": "N/A",
             "location": "N/A", "quantity": "0", "unit": "N/A", "expiration_date": "N/A"
         }
 
-        st.subheader("Review & Add (auto-filled / manual)")
         with st.form("scan_add_form"):
             c1, c2, c3 = st.columns(3)
 
@@ -721,8 +816,7 @@ with tab_scan:
                     dt = pd.to_datetime(exp_str, errors="coerce")
                     scan_exp = st.date_input("Expiration date", value=(dt.date() if pd.notnull(dt) else date.today()))
 
-            submitted = st.form_submit_button("➕ Add reagent", type="primary", use_container_width=True)
-            if submitted:
+            if st.form_submit_button("➕ Add reagent", type="primary", use_container_width=True):
                 if NA(scan_name) == "N/A":
                     st.error("Name is required. Please type it if OCR missed it.")
                     st.stop()
@@ -745,63 +839,46 @@ with tab_scan:
                 st.success("Reagent added from scan.")
                 load_inventory.clear()
                 st.session_state.pop("scan_fields", None)
+                st.session_state.pop("ocr_text", None)
                 clear_scan_image_bytes()
                 st.rerun()
 
-        if st.button("Clear image + scan result"):
-            st.session_state.pop("scan_fields", None)
-            clear_scan_image_bytes()
-            st.rerun()
+        c = st.columns([1, 1, 1])
+        with c[0]:
+            if st.button("🧹 Clear image + OCR", use_container_width=True):
+                clear_scan_bytes()
+                clear_scan_image_bytes()
+                st.rerun()
+        with c[1]:
+            st.caption("Tip: For best OCR, fill the screen with the label, good lighting, no glare.")
+        with c[2]:
+            pass
     else:
-        st.caption("No image stored yet. Use Camera or Upload above.")
+        st.info("No image stored yet. Use Camera or Upload above.")
 
 # ── Admin ───────────────────────────────────────────────────────────────────
 with tab_admin:
     st.header("Admin")
 
-    st.subheader("System status")
+    st.subheader("Runtime info")
+    st.write("Streamlit version:", st.__version__)
+    st.write("Pillow available:", PIL_AVAILABLE)
+    st.write("Cloud OCR configured:", vision_available())
     st.write("Locks sheet enabled:", LOCKS_ENABLED)
     st.write("Audit sheet enabled:", AUDIT_ENABLED)
-    st.write("OCR available:", OCR_AVAILABLE)
-    st.write("Pillow available:", Image is not None)
 
-    if st.session_state.role != "admin":
-        st.info("Admin only")
-    else:
-        st.subheader("Send alerts now (optional)")
-        if st.button("Send Slack + Email alerts"):
-            lines = []
-            if low_alerts:
-                lines.append("LOW STOCK:\n" + "\n".join(low_alerts))
-            if expired_alerts:
-                lines.append("EXPIRED:\n" + "\n".join(expired_alerts))
-            msg = "\n\n".join(lines) if lines else "No alerts."
+    st.subheader("Secrets required for Cloud OCR")
+    st.code('[gcp_vision]\napi_key = "YOUR_GOOGLE_VISION_API_KEY"\n', language="toml")
 
-            try:
-                send_slack(msg)
-            except Exception as e:
-                st.warning(f"Slack not sent: {e}")
-
-            try:
-                send_email("Lab Inventory Alerts", msg)
-            except Exception as e:
-                st.warning(f"Email not sent: {e}")
-
-            st.success("Done (sent if configured).")
-
-        st.subheader("Secrets check")
-        st.write("Has Slack webhook:", bool(st.secrets.get("slack", {}).get("webhook_url")))
-        st.write("Has Email config:", bool(st.secrets.get("email", {}).get("smtp_user")))
-
-        st.subheader("Recommended sheet headers")
-        st.code(
-            "Inventory (template) header row:\n"
-            + " | ".join(EXPECTED_COLS)
-            + "\n\nLocks (locks) header row:\n"
-              "row | locked_by | locked_until_iso | purpose\n\n"
-              "Audit (audit_log) header row:\n"
-              "ts_iso | user | role | action | row | reagent_name | details\n",
-            language="text"
-        )
+    st.subheader("Recommended sheet headers")
+    st.code(
+        "Inventory (template) header row:\n"
+        + " | ".join(EXPECTED_COLS)
+        + "\n\nLocks (locks) header row:\n"
+          "row | locked_by | locked_until_iso | purpose\n\n"
+          "Audit (audit_log) header row:\n"
+          "ts_iso | user | role | action | row | reagent_name | details\n",
+        language="text"
+    )
 
 st.caption("Laboratory Reagent Inventory • January 2026")
