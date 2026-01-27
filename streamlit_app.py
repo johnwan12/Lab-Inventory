@@ -144,16 +144,10 @@ def vision_text_detection(image_bytes: bytes) -> dict:
         }]
     }
     
-    r = requests.post(url, json=payload, timeout=30)
-if not r.ok:
-    st.error(f"Vision OCR failed: HTTP {r.status_code}")
-    st.code(r.text, language="json")  # <-- shows the real reason
-    r.raise_for_status()
-    # return r.json()
     
-    # r = requests.post(url, json=payload, timeout=25)
-    # r.raise_for_status()
-    # return r.json()
+    r = requests.post(url, json=payload, timeout=25)
+    r.raise_for_status()
+    return r.json()
 
 def vision_extract_full_text(resp_json: dict) -> str:
     try:
@@ -892,6 +886,7 @@ with tab_admin:
     )
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
