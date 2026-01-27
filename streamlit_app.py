@@ -31,16 +31,16 @@ st.caption("Streamlit + Google Sheets API v4 • Production-safe CRUD")
 # Google Sheets init
 # ─────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Connecting to Google Sheets...")
-# def get_sheets_service():
-#     sa_info = st.secrets["google_service_account"]
-#     creds = Credentials.from_service_account_info(
-#         sa_info,
-#         scopes=["https://www.googleapis.com/auth/spreadsheets"]
-#     )
-#     service = build("sheets", "v4", credentials=creds).spreadsheets()
-#     spreadsheet_id = st.secrets.connections.gsheets.spreadsheet
-#     return service, spreadsheet_id
-
+def get_sheets_service():
+    #sa_info = st.secrets["google_service_account"]
+    creds = Credentials.from_service_account_info(
+        sa_info,
+        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    service = build("sheets", "v4", credentials=creds).spreadsheets()
+    spreadsheet_id = st.secrets.connections.gsheets.spreadsheet
+    return service, spreadsheet_id
+    st.stop()
 
 
 
@@ -354,6 +354,7 @@ with tab_admin:
             st.rerun()
 
 st.caption("Laboratory Reagent Inventory • 2026")
+
 
 
 
