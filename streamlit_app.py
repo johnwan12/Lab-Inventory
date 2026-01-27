@@ -41,9 +41,12 @@ st.caption("Streamlit + Google Sheets API v4 • Production-safe CRUD")
 #     spreadsheet_id = st.secrets.connections.gsheets.spreadsheet
 #     return service, spreadsheet_id
 
-# 🔎 DEBUG: verify spreadsheet access
+# ── DEBUG: verify spreadsheet access ─────────────────────────
 try:
-    meta = sheets_service.get(spreadsheetId=SPREADSHEET_ID).execute()
+    meta = sheets_service.get(
+        spreadsheetId=SPREADSHEET_ID
+    ).execute()
+
     st.success("✅ Spreadsheet access OK")
 
     sheet_titles = [
@@ -56,6 +59,8 @@ except Exception as e:
     st.error("❌ Cannot access spreadsheet")
     st.exception(e)
     st.stop()
+# ─────────────────────────────────────────────────────────────
+
 
 
 
@@ -347,6 +352,7 @@ with tab_admin:
             st.rerun()
 
 st.caption("Laboratory Reagent Inventory • 2026")
+
 
 
 
