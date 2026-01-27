@@ -260,8 +260,211 @@ with tab_catalog:
             load_reagents.clear()
             st.rerun()
 
+with st.expander(f"{name} • sheet row {rownum}", expanded=False):
+    cols = st.columns([3, 1])
+
+    # ── LEFT: Edit ─────────────────────────────
+    with cols[0]:
+        with st.form(f"edit_{rownum}"):
+            name2 = st.text_input("Name", value=str(r.get("name", "")))
+            cas2 = st.text_input("CAS Number", value=str(r.get("cas_number", "")))
+            sup2 = st.text_input("Supplier", value=str(r.get("supplier", "")))
+            loc2 = st.text_input("Location", value=str(r.get("location", "")))
+
+            qty2 = st.number_input(
+                "Quantity",
+                min_value=0.0,
+                value=float(r.get("quantity", 0.0)),
+                step=0.1
+            )
+            unit2 = st.text_input("Unit", value=str(r.get("unit", "")))
+
+            exp_val = r.get("expiration_date")
+            has_exp = st.checkbox(
+                "Has expiration date",
+                value=pd.notnull(exp_val),
+                key=f"hasexp_{rownum}"
+            )
+            exp2 = (
+                st.date_input(
+                    "Expiration Date",
+                    value=exp_val,
+                    key=f"exp_{rownum}"
+                )
+                if has_exp and pd.notnull(exp_val)
+                else None
+            )
+
+            low2 = st.number_input(
+                "Low stock threshold",
+                min_value=0.0,
+                value=float(r.get("low_stock_threshold", 10.0)),
+                step=1.0
+            )
+
+            if st.form_submit_button("💾 Save row", type="primary"):
+                updates = {
+                    "name": name2.strip(),
+                    "cas_number": cas2.strip(),
+                    "supplier": sup2.strip(),
+                    "location": loc2.strip(),
+                    "quantity": str(qty2),
+                    "unit": unit2.strip(),
+                    "expiration_date": exp2.isoformat() if exp2 else "",
+                    "low_stock_threshold": str(low2),
+                }
+
+                for col, val in updates.items():
+                    col_letter = COL_LETTER[col]
+                    sheets_service.values().update(
+                        spreadsheetId=SPREADSHEET_ID,
+                        range=f"{WORKSHEET}!{col_letter}{rownum}",
+                        valueInputOption="RAW",
+                        body={"values": [[val]]},
+                    ).execute()
+
+                st.success("Row updated")
+                load_reagents.clear()
+                st.rerun()
+
+    # ── RIGHT: Delete ───────────────────────────
+    with cols[1]:
+        st.write("")
+        confirm = st.checkbox(
+            "Confirm delete",
+            key=f"confirm_del_{rownum}"
+        )
+
+        if st.button(
+            "🗑️ Delete row",
+            key=f"del_{rownum}",
+            disabled=not confirm
+        ):
+            sheet_id = get_sheet_id_by_title(WORKSHEET)
+            sheets_service.batchUpdate(
+                spreadsheetId=SPREADSHEET_ID,
+                body={
+                    "requests": [{
+                        "deleteDimension": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "dimension": "ROWS",
+                                "startIndex": rownum - 1,
+                                "endIndex": rownum
+                            }
+                        }
+                    }]
+                }
+            ).execute()
+
+            st.success("Row deleted")
+            load_reagents.clear()
+            st.rerun()
+with st.expander(f"{name} • sheet row {rownum}", expanded=False):
+    cols = st.columns([3, 1])
+
+    # ── LEFT: Edit ─────────────────────────────
+    with cols[0]:
+        with st.form(f"edit_{rownum}"):
+            name2 = st.text_input("Name", value=str(r.get("name", "")))
+            cas2 = st.text_input("CAS Number", value=str(r.get("cas_number", "")))
+            sup2 = st.text_input("Supplier", value=str(r.get("supplier", "")))
+            loc2 = st.text_input("Location", value=str(r.get("location", "")))
+
+            qty2 = st.number_input(
+                "Quantity",
+                min_value=0.0,
+                value=float(r.get("quantity", 0.0)),
+                step=0.1
+            )
+            unit2 = st.text_input("Unit", value=str(r.get("unit", "")))
+
+            exp_val = r.get("expiration_date")
+            has_exp = st.checkbox(
+                "Has expiration date",
+                value=pd.notnull(exp_val),
+                key=f"hasexp_{rownum}"
+            )
+            exp2 = (
+                st.date_input(
+                    "Expiration Date",
+                    value=exp_val,
+                    key=f"exp_{rownum}"
+                )
+                if has_exp and pd.notnull(exp_val)
+                else None
+            )
+
+            low2 = st.number_input(
+                "Low stock threshold",
+                min_value=0.0,
+                value=float(r.get("low_stock_threshold", 10.0)),
+                step=1.0
+            )
+
+            if st.form_submit_button("💾 Save row", type="primary"):
+                updates = {
+                    "name": name2.strip(),
+                    "cas_number": cas2.strip(),
+                    "supplier": sup2.strip(),
+                    "location": loc2.strip(),
+                    "quantity": str(qty2),
+                    "unit": unit2.strip(),
+                    "expiration_date": exp2.isoformat() if exp2 else "",
+                    "low_stock_threshold": str(low2),
+                }
+
+                for col, val in updates.items():
+                    col_letter = COL_LETTER[col]
+                    sheets_service.values().update(
+                        spreadsheetId=SPREADSHEET_ID,
+                        range=f"{WORKSHEET}!{col_letter}{rownum}",
+                        valueInputOption="RAW",
+                        body={"values": [[val]]},
+                    ).execute()
+
+                st.success("Row updated")
+                load_reagents.clear()
+                st.rerun()
+
+    # ── RIGHT: Delete ───────────────────────────
+    with cols[1]:
+        st.write("")
+        confirm = st.checkbox(
+            "Confirm delete",
+            key=f"confirm_del_{rownum}"
+        )
+
+        if st.button(
+            "🗑️ Delete row",
+            key=f"del_{rownum}",
+            disabled=not confirm
+        ):
+            sheet_id = get_sheet_id_by_title(WORKSHEET)
+            sheets_service.batchUpdate(
+                spreadsheetId=SPREADSHEET_ID,
+                body={
+                    "requests": [{
+                        "deleteDimension": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "dimension": "ROWS",
+                                "startIndex": rownum - 1,
+                                "endIndex": rownum
+                            }
+                        }
+                    }]
+                }
+            ).execute()
+
+            st.success("Row deleted")
+            load_reagents.clear()
+            st.rerun()
+
+
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
