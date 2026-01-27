@@ -121,17 +121,22 @@ def load_reagents():
 # ── Alerts ──────────────────────────────────────────────────────────────────
 alerts = []
 today = date.today()
-for _, row in reagents_df.iterrows():
-    qty = row.get("quantity", 0)
-    thresh = row.get("low_stock_threshold", 10.0)
-    if qty <= thresh:
-        alerts.append(f"⚠️ **Low Stock**: {row.get('name','?')} — {qty:.2f} {row.get('unit','?')}")
-    exp = row.get("expiration_date")
-    if pd.notnull(exp) and exp < today:
-        alerts.append(f"❌ **Expired**: {row.get('name','?')} ({exp})")
+
+if not reagents_df.empty:
+    for _, row in reagents_df.iterrows():
+        qty = float(row.get("quantity", 0) or 0)
+        thresh = float(row.get("low_stock_threshold", 10.0) or 10.0)
+
+        if qty <= thresh:
+            alerts.append(f"⚠️ **Low Stock**: {row.get('name','?')} — {qty:.2f} {row.get('unit','?')}")
+
+        exp = row.get("expiration_date")
+        if pd.notnull(exp) and exp < today:
+            alerts.append(f"❌ **Expired**: {row.get('name','?')} ({exp})")
 
 if alerts:
     st.warning("\n".join(alerts), icon="🚨")
+
 
 # ── Tabs ────────────────────────────────────────────────────────────────────
 tab_catalog, tab_add, tab_log, tab_qr, tab_admin = st.tabs([
@@ -248,6 +253,7 @@ with tab_catalog:
                         st.rerun()
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
