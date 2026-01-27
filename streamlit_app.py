@@ -1,8 +1,9 @@
 # streamlit_app.py - Laboratory Reagent Inventory System
 # Single-file version (no external modules)
 # Full CRUD using Google Sheets API v4
-# Hardened for multi-user labs (soft-lock + audit log)
+# Multi-user hardening: soft-lock + audit log
 # Location dropdown + CustomEntry
+# Photo Scan → OCR → auto-fill Add (missing fields => "N/A")
 # Slack + Email alerts (optional)
 # Revised: January 2026
 
@@ -15,16 +16,25 @@ import urllib.request
 import smtplib
 from email.message import EmailMessage
 import time
+import re
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+
+# OCR optional (Streamlit Cloud may not have tesseract binary)
+OCR_AVAILABLE = True
+try:
+    from PIL import Image, ImageOps, ImageEnhance
+    import pytesseract
+except Exception:
+    OCR_AVAILABLE = False
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 WORKSHEET_INVENTORY = "template"   # inventory tab name
-WORKSHEET_LOCKS = "locks"         # locks tab name (must exist)
-WORKSHEET_AUDIT = "audit_log"     # audit tab name (must exist)
+WORKSHEET_LOCKS = "locks"         # locks tab name (recommended)
+WORKSHEET_AUDIT = "audit_log"     # audit tab name (recommended)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -51,7 +61,7 @@ READ_RANGE = f"{WORKSHEET_INVENTORY}!A1:Z5000"
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Lab Reagent Inventory", layout="wide")
 st.title("🧪 Laboratory Reagent Inventory System")
-st.caption("Streamlit + Google Sheets API v4 • Multi-user CRUD • Alerts")
+st.caption("Streamlit + Google Sheets API v4 • Multi-user CRUD • OCR scan-to-add")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
@@ -86,13 +96,90 @@ def location_widget(label: str, value: str, key: str) -> str:
     default_idx = LOCATION_CHOICES.index(value) if value in LOCATION_CHOICES else LOCATION_CHOICES.index("CustomEntry")
     choice = st.selectbox(label, LOCATION_CHOICES, index=default_idx, key=f"{key}_choice")
     if choice == "CustomEntry":
-        custom = st.text_input(
-            "Custom location",
-            value=value if value not in LOCATION_CHOICES else "",
-            key=f"{key}_custom"
-        )
+        custom = st.text_input("Custom location", value=value if value not in LOCATION_CHOICES else "", key=f"{key}_custom")
         return custom.strip()
     return choice
+
+def NA(v) -> str:
+    v = "" if v is None else str(v).strip()
+    return v if v else "N/A"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIONAL OCR + PARSING
+# ─────────────────────────────────────────────────────────────────────────────
+def ocr_image_to_text(img):
+    """Return OCR text from an uploaded PIL image. Raises if OCR not available."""
+    if not OCR_AVAILABLE:
+        raise RuntimeError("OCR dependencies not available (Pillow/pytesseract).")
+    img = ImageOps.exif_transpose(img)
+    gray = ImageOps.grayscale(img)
+    gray = ImageEnhance.Contrast(gray).enhance(2.0)
+    gray = ImageEnhance.Sharpness(gray).enhance(2.0)
+    config = "--psm 6"
+    return pytesseract.image_to_string(gray, config=config)
+
+def _find_first(patterns, text, flags=re.IGNORECASE):
+    for p in patterns:
+        m = re.search(p, text, flags)
+        if m:
+            return m.group(1).strip()
+    return None
+
+def parse_reagent_fields(text: str) -> dict:
+    """
+    OCR → reagent fields.
+    Missing values are returned as 'N/A'.
+    Replaces any prior catalog_number logic with cas_number only.
+    """
+    t = " ".join(text.split())
+
+    cas = _find_first(
+        [
+            r"CAS[:\s]*([0-9]{2,7}-[0-9]{2}-[0-9])",
+            r"CAS\s*No\.?[:\s]*([0-9]{2,7}-[0-9]{2}-[0-9])",
+        ],
+        t
+    )
+
+    supplier = _find_first(
+        [
+            r"(?:Supplier|Manufacturer|Mfr\.?)[:\s]*([A-Za-z0-9 &\-\.,]+)",
+        ],
+        t
+    )
+
+    exp_raw = _find_first(
+        [
+            r"(?:Exp(?:iration)?|Expiry|Use\s*By|Best\s*Before)[:\s]*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2})",
+            r"(?:Exp(?:iration)?|Expiry|Use\s*By|Best\s*Before)[:\s]*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})",
+        ],
+        t
+    )
+
+    exp_iso = ""
+    if exp_raw:
+        dt = pd.to_datetime(exp_raw, errors="coerce")
+        if pd.notnull(dt):
+            exp_iso = dt.date().isoformat()
+
+    # Name guess: first long-ish non-code line
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    name_guess = "N/A"
+    for ln in lines[:10]:
+        if len(ln) >= 4 and not re.fullmatch(r"[A-Z0-9\-_]+", ln):
+            name_guess = ln
+            break
+
+    return {
+        "id": "N/A",
+        "name": NA(name_guess),
+        "cas_number": NA(cas),
+        "supplier": NA(supplier),
+        "location": "N/A",
+        "quantity": "0",
+        "unit": "N/A",
+        "expiration_date": exp_iso if exp_iso else "N/A",
+    }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NOTIFY (Slack + Email) — optional
@@ -152,6 +239,16 @@ def get_sheet_id_by_title(sheet_title: str) -> int:
             return int(props.get("sheetId"))
     raise ValueError(f"Sheet tab '{sheet_title}' not found. Check WORKSHEET_* constants.")
 
+def sheet_exists(sheet_title: str) -> bool:
+    try:
+        get_sheet_id_by_title(sheet_title)
+        return True
+    except Exception:
+        return False
+
+LOCKS_ENABLED = sheet_exists(WORKSHEET_LOCKS)
+AUDIT_ENABLED = sheet_exists(WORKSHEET_AUDIT)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # AUTH (demo)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -188,15 +285,15 @@ if st.sidebar.button("🚪 Logout", use_container_width=True):
         st.session_state.pop(k, None)
     st.rerun()
 
-st.sidebar.success(
-    f"Logged in as **{st.session_state.username}** ({st.session_state.role})",
-    icon="👤"
-)
+st.sidebar.success(f"Logged in as **{st.session_state.username}** ({st.session_state.role})", icon="👤")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOCKS (soft lock)
+# LOCKS (soft-lock)
 # ─────────────────────────────────────────────────────────────────────────────
 def try_lock_row(rownum: int, user: str, purpose: str, lease_seconds=90) -> bool:
+    if not LOCKS_ENABLED:
+        return True  # degrade gracefully if locks tab missing
+
     rng = f"{WORKSHEET_LOCKS}!A1:D5000"
     res = with_retries(lambda: sheets.values().get(spreadsheetId=SPREADSHEET_ID, range=rng).execute())
     vals = res.get("values", [])
@@ -223,11 +320,9 @@ def try_lock_row(rownum: int, user: str, purpose: str, lease_seconds=90) -> bool
         except:
             locked_until_dt = now - timedelta(days=365)
 
-        # Someone else holds a non-expired lock
         if locked_until_dt > now and locked_by and locked_by != user:
             return False
 
-    # Append a lock record
     with_retries(lambda: sheets.values().append(
         spreadsheetId=SPREADSHEET_ID,
         range=f"{WORKSHEET_LOCKS}!A1",
@@ -241,6 +336,8 @@ def try_lock_row(rownum: int, user: str, purpose: str, lease_seconds=90) -> bool
 # AUDIT LOG
 # ─────────────────────────────────────────────────────────────────────────────
 def audit(action: str, row: int, reagent_name: str, details: str):
+    if not AUDIT_ENABLED:
+        return  # degrade gracefully if audit sheet missing
     ts = now_utc().isoformat()
     with_retries(lambda: sheets.values().append(
         spreadsheetId=SPREADSHEET_ID,
@@ -282,14 +379,14 @@ def load_inventory():
         if c not in df.columns:
             df[c] = ""
 
-    # Sheet row number mapping (row 1 is header)
+    # Stable sheet row mapping (row 1 is header)
     df["_row"] = [i + 2 for i in range(len(df))]
 
     # Types
     df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0.0)
     df["low_stock_threshold"] = pd.to_numeric(df["low_stock_threshold"], errors="coerce").fillna(10.0)
 
-    # expiration_date becomes python date OR NaT; guard later with pd.notnull
+    # expiration_date -> python date OR NaT; guard later with pd.notnull
     df["expiration_date"] = pd.to_datetime(df["expiration_date"], errors="coerce").dt.date
 
     df = df[EXPECTED_COLS + ["_row"]]
@@ -340,12 +437,11 @@ def delete_row(rownum: int):
     ).execute())
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ALERTS (FIXED NaT comparisons)
+# ALERTS (NaT-safe)
 # ─────────────────────────────────────────────────────────────────────────────
 def build_alerts(df: pd.DataFrame):
     low, expired = [], []
     today = date.today()
-
     if df.empty:
         return low, expired
 
@@ -359,8 +455,6 @@ def build_alerts(df: pd.DataFrame):
             low.append(f"{name}: {qty:.2f} {unit} (threshold {thresh:.2f})")
 
         exp = row.get("expiration_date")
-
-        # ✅ Robust: handle NaT/NaN/None safely
         if pd.notnull(exp):
             exp_date = exp.date() if hasattr(exp, "date") else exp
             if exp_date < today:
@@ -381,7 +475,7 @@ if low_alerts or expired_alerts:
 # ─────────────────────────────────────────────────────────────────────────────
 # UI TABS
 # ─────────────────────────────────────────────────────────────────────────────
-tab_catalog, tab_add, tab_admin = st.tabs(["📋 Catalog", "➕ Add", "🛠 Admin"])
+tab_catalog, tab_add, tab_scan, tab_admin = st.tabs(["📋 Catalog", "➕ Add", "📷 Scan & Add", "🛠 Admin"])
 
 # ── Catalog ─────────────────────────────────────────────────────────────────
 with tab_catalog:
@@ -397,11 +491,7 @@ with tab_catalog:
     if df_view.empty:
         st.info("No matching reagents.")
     else:
-        st.dataframe(
-            df_view.drop(columns=["_row"], errors="ignore"),
-            use_container_width=True,
-            hide_index=True
-        )
+        st.dataframe(df_view.drop(columns=["_row"], errors="ignore"), use_container_width=True, hide_index=True)
 
         st.subheader("Row actions (Edit / Delete)")
         for _, r in df_view.iterrows():
@@ -420,12 +510,7 @@ with tab_catalog:
 
                         loc2 = location_widget("Location", value=str(r.get("location", "")), key=f"loc_{rownum}")
 
-                        qty2 = st.number_input(
-                            "Quantity",
-                            min_value=0.0,
-                            value=float(r.get("quantity", 0.0) or 0.0),
-                            step=0.1
-                        )
+                        qty2 = st.number_input("Quantity", min_value=0.0, value=float(r.get("quantity", 0.0) or 0.0), step=0.1)
                         unit2 = st.text_input("Unit", value=str(r.get("unit", "")))
 
                         exp_val = r.get("expiration_date")
@@ -436,12 +521,7 @@ with tab_catalog:
                             key=f"exp_{rownum}"
                         ) if has_exp else None
 
-                        low2 = st.number_input(
-                            "Low stock threshold",
-                            min_value=0.0,
-                            value=float(r.get("low_stock_threshold", 10.0) or 10.0),
-                            step=1.0
-                        )
+                        low2 = st.number_input("Low stock threshold", min_value=0.0, value=float(r.get("low_stock_threshold", 10.0) or 10.0), step=1.0)
 
                         if st.form_submit_button("💾 Save row", type="primary"):
                             if not try_lock_row(rownum, st.session_state.username, "edit"):
@@ -449,18 +529,18 @@ with tab_catalog:
                                 st.stop()
 
                             updates = {
-                                "name": name2.strip(),
-                                "cas_number": cas2.strip(),
-                                "supplier": sup2.strip(),
-                                "location": loc2.strip(),
+                                "name": NA(name2),
+                                "cas_number": NA(cas2),
+                                "supplier": NA(sup2),
+                                "location": NA(loc2),
                                 "quantity": str(qty2),
-                                "unit": unit2.strip(),
-                                "expiration_date": exp2.isoformat() if exp2 else "",
+                                "unit": NA(unit2),
+                                "expiration_date": (exp2.isoformat() if exp2 else "N/A"),
                                 "low_stock_threshold": str(low2),
                             }
 
                             update_row_cells(rownum, updates)
-                            audit("UPDATE", rownum, name2, json.dumps(updates, ensure_ascii=False))
+                            audit("UPDATE", rownum, NA(name2), json.dumps(updates, ensure_ascii=False))
 
                             st.success("Row updated.")
                             load_inventory.clear()
@@ -504,32 +584,139 @@ with tab_add:
             new_exp = st.date_input("Expiration date", value=date.today()) if has_exp else None
 
         if st.form_submit_button("➕ Add reagent", type="primary", use_container_width=True):
-            if not new_name.strip():
-                st.error("Name is required.")
+            if not NA(new_name) or NA(new_name) == "N/A":
+                st.error("Name is required (cannot be blank).")
                 st.stop()
 
             payload = {
-                "id": new_id.strip(),
-                "name": new_name.strip(),
-                "cas_number": new_cas.strip(),
-                "supplier": new_supplier.strip(),
-                "location": new_location.strip(),
+                "id": NA(new_id),
+                "name": NA(new_name),
+                "cas_number": NA(new_cas),
+                "supplier": NA(new_supplier),
+                "location": NA(new_location),
                 "quantity": str(new_qty),
-                "unit": new_unit.strip(),
-                "expiration_date": new_exp.isoformat() if new_exp else "",
+                "unit": NA(new_unit),
+                "expiration_date": (new_exp.isoformat() if new_exp else "N/A"),
                 "low_stock_threshold": str(new_low),
             }
 
             append_row(payload)
-            audit("CREATE", 0, new_name, json.dumps(payload, ensure_ascii=False))
+            audit("CREATE", 0, payload["name"], json.dumps(payload, ensure_ascii=False))
 
             st.success("Reagent added.")
             load_inventory.clear()
             st.rerun()
 
+# ── Scan & Add ──────────────────────────────────────────────────────────────
+with tab_scan:
+    st.header("📷 Scan photo → Auto-fill → Add")
+    st.write(
+        'Workflow: Upload a photo of the reagent label → OCR extracts fields → missing fields become **"N/A"** '
+        "→ review and add."
+    )
+
+    if not OCR_AVAILABLE:
+        st.warning(
+            "OCR libraries (Pillow / pytesseract) are not available in this environment.\n\n"
+            "If you're on Streamlit Community Cloud, OCR may also fail if the tesseract system binary "
+            "is not installed. In that case, deploy on Docker/EC2, or use a cloud OCR API.",
+            icon="⚠️"
+        )
+
+    img_file = st.file_uploader("Upload reagent photo (JPG/PNG)", type=["png", "jpg", "jpeg"])
+    if img_file:
+        img = None
+        try:
+            img = Image.open(img_file) if OCR_AVAILABLE else None
+        except Exception as e:
+            st.error(f"Cannot open image: {e}")
+
+        if img is not None:
+            st.image(img, caption="Uploaded label", use_container_width=True)
+
+        if st.button("🔎 Scan photo (OCR)", type="primary", disabled=(not OCR_AVAILABLE or img is None)):
+            try:
+                with st.spinner("Running OCR..."):
+                    text = ocr_image_to_text(img)
+                st.text_area("OCR output (debug)", text, height=180)
+                fields = parse_reagent_fields(text)
+                st.session_state["scan_fields"] = fields
+                st.success('Scan complete. Review below; missing values are set to "N/A".')
+            except Exception as e:
+                st.error(f"OCR failed: {e}")
+
+    fields = st.session_state.get("scan_fields")
+    if fields:
+        st.subheader("Review & Add (auto-filled)")
+
+        with st.form("scan_add_form"):
+            c1, c2, c3 = st.columns(3)
+
+            with c1:
+                scan_id = st.text_input("ID", value=fields.get("id", "N/A"))
+                scan_name = st.text_input("Name", value=fields.get("name", "N/A"))
+                scan_cas = st.text_input("CAS Number", value=fields.get("cas_number", "N/A"))
+
+            with c2:
+                scan_supplier = st.text_input("Supplier", value=fields.get("supplier", "N/A"))
+                scan_location = location_widget("Location", value=fields.get("location", "N/A"), key="scan_loc")
+                scan_unit = st.text_input("Unit", value=fields.get("unit", "N/A"))
+
+            with c3:
+                # quantity default from scan is "0"
+                try:
+                    qty_default = float(fields.get("quantity", "0") or 0)
+                except Exception:
+                    qty_default = 0.0
+                scan_qty = st.number_input("Quantity", min_value=0.0, value=qty_default, step=0.1)
+
+                scan_low = st.number_input("Low stock threshold", min_value=0.0, value=10.0, step=1.0)
+
+                exp_str = fields.get("expiration_date", "N/A")
+                has_exp = st.checkbox("Has expiration date?", value=(exp_str != "N/A"))
+                scan_exp = None
+                if has_exp:
+                    dt = pd.to_datetime(exp_str, errors="coerce")
+                    scan_exp = st.date_input("Expiration date", value=(dt.date() if pd.notnull(dt) else date.today()))
+
+            submitted = st.form_submit_button("➕ Add reagent", type="primary", use_container_width=True)
+            if submitted:
+                if NA(scan_name) == "N/A":
+                    st.error("Name is required. If OCR missed it, type it manually.")
+                    st.stop()
+
+                payload = {
+                    "id": NA(scan_id),
+                    "name": NA(scan_name),
+                    "cas_number": NA(scan_cas),
+                    "supplier": NA(scan_supplier),
+                    "location": NA(scan_location),
+                    "quantity": str(scan_qty),
+                    "unit": NA(scan_unit),
+                    "expiration_date": (scan_exp.isoformat() if scan_exp else "N/A"),
+                    "low_stock_threshold": str(scan_low),
+                }
+
+                append_row(payload)
+                audit("CREATE_SCAN", 0, payload["name"], json.dumps(payload, ensure_ascii=False))
+
+                st.success("Reagent added from scan.")
+                load_inventory.clear()
+                st.session_state.pop("scan_fields", None)
+                st.rerun()
+
+        if st.button("Clear scan result"):
+            st.session_state.pop("scan_fields", None)
+            st.rerun()
+
 # ── Admin ───────────────────────────────────────────────────────────────────
 with tab_admin:
     st.header("Admin")
+
+    st.subheader("System status")
+    st.write("Locks sheet enabled:", LOCKS_ENABLED)
+    st.write("Audit sheet enabled:", AUDIT_ENABLED)
+    st.write("OCR available (Python libs):", OCR_AVAILABLE)
 
     if st.session_state.role != "admin":
         st.info("Admin only")
@@ -558,5 +745,16 @@ with tab_admin:
         st.subheader("Secrets check")
         st.write("Has Slack webhook:", bool(st.secrets.get("slack", {}).get("webhook_url")))
         st.write("Has Email config:", bool(st.secrets.get("email", {}).get("smtp_user")))
+
+        st.subheader("Recommended sheet headers")
+        st.code(
+            "Inventory (template) header row:\n"
+            + " | ".join(EXPECTED_COLS)
+            + "\n\nLocks (locks) header row:\n"
+              "row | locked_by | locked_until_iso | purpose\n\n"
+              "Audit (audit_log) header row:\n"
+              "ts_iso | user | role | action | row | reagent_name | details\n",
+            language="text"
+        )
 
 st.caption("Laboratory Reagent Inventory • January 2026")
