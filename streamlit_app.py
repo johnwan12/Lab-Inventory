@@ -82,34 +82,41 @@ def load_reagents():
             spreadsheetId=SPREADSHEET_ID,
             range=READ_RANGE
         ).execute()
-        
-        values = result.get('values', [])
+
+        values = result.get("values", [])
         if not values:
             return pd.DataFrame()
-        
+
         headers = values[0]
         data = values[1:]
         df = pd.DataFrame(data, columns=headers)
-        
+
+        # ✅ stable sheet row number mapping (row 1 is header)
+        df["_row"] = [i + 2 for i in range(len(df))]
+
         expected = [
             "id", "name", "cas_number", "supplier", "location",
             "quantity", "unit", "expiration_date", "low_stock_threshold"
         ]
-        df = df[[c for c in expected if c in df.columns]]
-        
+
+        keep_cols = [c for c in expected if c in df.columns]
+        df = df[keep_cols + ["_row"]]
+
         if "expiration_date" in df.columns:
             df["expiration_date"] = pd.to_datetime(df["expiration_date"], errors="coerce").dt.date
-        
-        df["quantity"] = pd.to_numeric(df.get("quantity", 0), errors="coerce").fillna(0.0)
-        df["low_stock_threshold"] = pd.to_numeric(df.get("low_stock_threshold", 10.0), errors="coerce").fillna(10.0)
-        
-        return df.sort_values("name")
-    
+
+        if "quantity" in df.columns:
+            df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0.0)
+
+        if "low_stock_threshold" in df.columns:
+            df["low_stock_threshold"] = pd.to_numeric(df["low_stock_threshold"], errors="coerce").fillna(10.0)
+
+        return df.sort_values("name", kind="stable").reset_index(drop=True)
+
     except Exception as e:
         st.error(f"Failed to load data: {str(e)}\n\nCheck: sheet ID, tab name, service account permissions")
         return pd.DataFrame()
 
-reagents_df = load_reagents()
 
 # ── Alerts ──────────────────────────────────────────────────────────────────
 alerts = []
@@ -241,6 +248,7 @@ with tab_catalog:
                         st.rerun()
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
