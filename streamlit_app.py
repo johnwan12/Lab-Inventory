@@ -41,6 +41,23 @@ st.caption("Streamlit + Google Sheets API v4 • Production-safe CRUD")
 #     spreadsheet_id = st.secrets.connections.gsheets.spreadsheet
 #     return service, spreadsheet_id
 
+
+
+
+
+
+@st.cache_resource
+def get_sheet_id(service, spreadsheet_id, worksheet_name):
+    meta = service.get(spreadsheetId=spreadsheet_id).execute()
+    for s in meta["sheets"]:
+        props = s["properties"]
+        if props["title"] == worksheet_name:
+            return props["sheetId"]
+    raise ValueError(f"Worksheet '{worksheet_name}' not found")
+
+
+sheets_service, SPREADSHEET_ID = get_sheets_service()
+
 # ── DEBUG: verify spreadsheet access ─────────────────────────
 try:
     meta = sheets_service.get(
@@ -60,21 +77,6 @@ except Exception as e:
     st.exception(e)
     st.stop()
 # ─────────────────────────────────────────────────────────────
-
-
-
-
-@st.cache_resource
-def get_sheet_id(service, spreadsheet_id, worksheet_name):
-    meta = service.get(spreadsheetId=spreadsheet_id).execute()
-    for s in meta["sheets"]:
-        props = s["properties"]
-        if props["title"] == worksheet_name:
-            return props["sheetId"]
-    raise ValueError(f"Worksheet '{worksheet_name}' not found")
-
-
-sheets_service, SPREADSHEET_ID = get_sheets_service()
 
 WORKSHEET = "template"
 READ_RANGE = f"{WORKSHEET}!A1:I2000"
@@ -352,6 +354,7 @@ with tab_admin:
             st.rerun()
 
 st.caption("Laboratory Reagent Inventory • 2026")
+
 
 
 
