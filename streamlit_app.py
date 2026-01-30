@@ -157,6 +157,117 @@ def append_usage_log(ts_iso, user, role, action, name, cas, amount_used, unit, q
         insertDataOption="INSERT_ROWS",
         body={"values": [row]},
     ).execute())
+#import from a CSV file    
+def normalize_col(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(s).strip().lower()).strip("_")
+
+def csv_to_inventory_rows(df_csv: pd.DataFrame, raw_headers: list[str]) -> list[list[str]]:
+    """
+    Convert CSV dataframe to a list of rows matching the Google Sheet header order (RAW_HEADERS).
+    Missing values -> "N/A".
+    """
+    if df_csv is None or df_csv.empty:
+        return []
+
+    df = df_csv.copy()
+    df.columns = [normalize_col(c) for c in df.columns]
+
+    # Common aliases in CSV files -> your sheet columns
+    alias = {
+        "id": ["id", "reagent_id", "item_id"],
+        "name": ["name", "reagent", "reagent_name", "chemical", "chemical_name", "product_name"],
+        "cas_number": ["cas", "cas_number", "cas_no", "cas#", "casnum"],
+        "supplier": ["supplier", "vendor", "manufacturer", "company", "brand"],
+        "location": ["location", "storage", "freezer", "shelf", "position"],
+        "quantity": ["quantity", "qty", "amount", "volume", "mass", "stock"],
+        "unit": ["unit", "units", "uom"],
+        "expiration_date": ["expiration_date", "expiry", "expiry_date", "exp", "exp_date", "expiration"],
+        "low_stock_threshold": ["low_stock_threshold", "threshold", "low_stock", "min_stock", "reorder_level"],
+    }
+
+    # Build reverse lookup: normalized CSV column -> canonical field
+    col_map = {}
+    for canonical, candidates in alias.items():
+        for c in candidates:
+            c_norm = normalize_col(c)
+            if c_norm in df.columns:
+                col_map[canonical] = c_norm
+                break  # first match wins
+
+    # Ensure required minimal columns exist
+    if "name" not in col_map:
+        raise ValueError("CSV must include a 'name' column (or alias like reagent_name/chemical).")
+
+    # Create rows in sheet header order
+    rows_out = []
+    for _, r in df.iterrows():
+        record = {}
+
+        # Pull values from CSV (or N/A)
+        for canonical in alias.keys():
+            if canonical in col_map:
+                val = r.get(col_map[canonical])
+                if pd.isna(val) or str(val).strip() == "":
+                    record[canonical] = "N/A"
+                else:
+                    record[canonical] = str(val).strip()
+            else:
+                # Not provided in CSV
+                record[canonical] = "N/A"
+
+        # Normalize numeric fields
+        # quantity
+        try:
+            if record["quantity"] != "N/A":
+                record["quantity"] = str(float(record["quantity"]))
+        except:
+            record["quantity"] = "N/A"
+
+        # low_stock_threshold
+        try:
+            if record["low_stock_threshold"] != "N/A":
+                record["low_stock_threshold"] = str(float(record["low_stock_threshold"]))
+        except:
+            record["low_stock_threshold"] = "N/A"
+
+        # expiration_date -> ISO if parseable, else N/A
+        if record["expiration_date"] != "N/A":
+            dt = pd.to_datetime(record["expiration_date"], errors="coerce")
+            record["expiration_date"] = dt.date().isoformat() if pd.notnull(dt) else "N/A"
+
+        # Build a sheet row in RAW_HEADERS order
+        sheet_row = []
+        for h in raw_headers:
+            h_norm = normalize_col(h)
+            # match against your expected cols
+            if h_norm in [normalize_col(x) for x in EXPECTED_COLS]:
+                # map header norm back to canonical key
+                # easiest: use EXPECTED_COLS list order
+                # find canonical key whose normalize_col matches h_norm
+                canonical_key = None
+                for k in EXPECTED_COLS:
+                    if normalize_col(k) == h_norm:
+                        canonical_key = k
+                        break
+                sheet_row.append(record.get(canonical_key, "N/A"))
+            else:
+                # sheet has extra columns not in our schema -> blank
+                sheet_row.append("")
+        rows_out.append(sheet_row)
+
+    return rows_out
+
+def append_rows_bulk(rows: list[list[str]]):
+    """Append many rows to the inventory sheet in one API call."""
+    if not rows:
+        return
+    with_retries(lambda: sheets.values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{WORKSHEET_INVENTORY}!A1",
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body={"values": rows},
+    ).execute())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -766,6 +877,47 @@ with tab_add:
             load_inventory.clear()
             st.rerun()
 
+st.divider()
+st.subheader("Import from CSV (append into Google Sheet)")
+
+# import from a CSV file
+csv_file = st.file_uploader(
+    "Upload CSV file",
+    type=["csv"],
+    accept_multiple_files=False,
+    key="import_csv"
+)
+
+if csv_file is not None:
+    try:
+        df_csv = pd.read_csv(csv_file)
+        st.success(f"Loaded CSV: {df_csv.shape[0]} rows × {df_csv.shape[1]} columns")
+        st_dataframe_safe(df_csv.head(50))
+    except Exception as e:
+        st.error(f"Failed to read CSV: {e}")
+        df_csv = None
+
+    if df_csv is not None:
+        if st.checkbox("I confirm I want to append these rows into Google Sheets", key="confirm_csv_import"):
+            if st.button("🚀 Import CSV → Append to Inventory", type="primary", use_container_width=True):
+                try:
+                    if not RAW_HEADERS:
+                        st.error("Cannot import: inventory sheet header row is missing.")
+                        st.stop()
+
+                    rows_to_append = csv_to_inventory_rows(df_csv, RAW_HEADERS)
+
+                    append_rows_bulk(rows_to_append)
+
+                    audit("CSV_IMPORT", 0, "BULK_IMPORT", f"Imported {len(rows_to_append)} rows from CSV")
+                    st.success(f"Imported {len(rows_to_append)} rows into '{WORKSHEET_INVENTORY}'!")
+                    load_inventory.clear()
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"CSV import failed: {e}")
+
+
 # ── Log ─────────────────────────────────────────────────────────────────────
 with tab_log:
     st.header("📉 Log Usage (deduct from stock)")
@@ -1081,6 +1233,7 @@ with tab_admin:
     )
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
