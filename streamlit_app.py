@@ -133,26 +133,55 @@ def vision_available() -> bool:
     
     return bool(st.secrets.get("gcp_vision", {}).get("api_key", ""))
 
-def vision_text_detection(image_bytes: bytes) -> dict:
-    """Google Vision TEXT_DETECTION using API key in secrets: [gcp_vision] api_key=..."""
+# def vision_text_detection(image_bytes: bytes) -> dict:
+#     """Google Vision TEXT_DETECTION using API key in secrets: [gcp_vision] api_key=..."""
     
+#     api_key = st.secrets["gcp_vision"]["api_key"]
+#     b64 = base64.b64encode(image_bytes).decode("utf-8")
+#     url = f"https://vision.googleapis.com/v1/images:annotate?key={api_key}"
+#     payload = {
+#         "requests": [{
+#             "image": {"content": b64},
+#             "features": [{"type": "TEXT_DETECTION"}]
+            
+#         }]
+#     }
+
+#############debug##########
+def vision_text_detection(image_bytes: bytes) -> dict:
     api_key = st.secrets["gcp_vision"]["api_key"]
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     url = f"https://vision.googleapis.com/v1/images:annotate?key={api_key}"
+
     payload = {
         "requests": [{
             "image": {"content": b64},
-            "features": [{"type": "TEXT_DETECTION"}]
-            r = requests.post(url, json=payload, timeout=25)
-            r.raise_for_status()
-            return r.json()
+            "features": [{"type": "TEXT_DETECTION"}],
         }]
     }
+
+    r = requests.post(url, json=payload, timeout=30)
+
+    if not r.ok:
+        st.error(f"Vision OCR failed: HTTP {r.status_code}")
+        try:
+            st.code(r.text, language="json")
+        except Exception:
+            st.write(r.text)
+        r.raise_for_status()
+
+    data = r.json()
+
+    err = data.get("responses", [{}])[0].get("error")
+    if err:
+        st.error("Vision OCR error returned by API")
+        st.code(json.dumps(err, indent=2), language="json")
+        raise RuntimeError(err.get("message", "Vision OCR error"))
+
+    return data
+
     
     
-    r = requests.post(url, json=payload, timeout=25)
-    r.raise_for_status()
-    return r.json()
 
 def vision_extract_full_text(resp_json: dict) -> str:
     try:
@@ -892,6 +921,7 @@ with tab_admin:
     )
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
