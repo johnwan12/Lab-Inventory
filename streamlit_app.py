@@ -40,6 +40,8 @@ except Exception:
 WORKSHEET_INVENTORY = "template"   # inventory tab name
 WORKSHEET_LOCKS = "locks"         # optional locks tab (recommended)
 WORKSHEET_AUDIT = "audit_log"     # optional audit tab (recommended)
+WORKSHEET_USAGE = "usage_log"
+
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -125,6 +127,37 @@ def location_widget(label: str, value: str, key: str) -> str:
         custom = st.text_input("Custom location", value=value if value not in LOCATION_CHOICES else "", key=f"{key}_custom")
         return custom.strip()
     return choice
+
+def append_usage_log(ts_iso, user, role, action, name, cas, amount_used, unit, qty_before, qty_after, location, notes):
+    # If sheet doesn't exist, just skip logging (doesn't break deduction)
+    try:
+        _ = get_sheet_id_by_title(WORKSHEET_USAGE)
+    except Exception:
+        return
+
+    row = [
+        ts_iso,
+        user,
+        role,
+        action,
+        name,
+        cas,
+        str(amount_used),
+        unit,
+        str(qty_before),
+        str(qty_after),
+        location,
+        notes or ""
+    ]
+
+    with_retries(lambda: sheets.values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{WORKSHEET_USAGE}!A1",
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body={"values": [row]},
+    ).execute())
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLOUD OCR (Google Vision) - optional usage
@@ -605,7 +638,12 @@ def clear_scan_image_bytes():
 # ─────────────────────────────────────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
-tab_catalog, tab_add, tab_scan, tab_admin = st.tabs(["📋 Catalog", "➕ Add", "📷 Scan & Add", "🛠 Admin"])
+# tab_catalog, tab_add, tab_scan, tab_admin = st.tabs(["📋 Catalog", "➕ Add", "📷 Scan & Add", "🛠 Admin"])
+
+tab_catalog, tab_add, tab_log, tab_scan, tab_admin = st.tabs([
+    "📋 Catalog", "➕ Add", "📉 Log Usage", "📷 Scan & Add", "🛠 Admin"
+])
+
 
 # ── Catalog ─────────────────────────────────────────────────────────────────
 with tab_catalog:
@@ -727,6 +765,128 @@ with tab_add:
             st.success("Reagent added.")
             load_inventory.clear()
             st.rerun()
+
+# ── Log ─────────────────────────────────────────────────────────────────────
+with tab_log:
+    st.header("📉 Log Usage (deduct from stock)")
+
+    if reagents_df.empty:
+        st.info("No inventory loaded.")
+    else:
+        q = st.text_input("Search by Name or CAS Number", "")
+
+        df = reagents_df.copy()
+
+        # Filter by name or cas_number
+        if q.strip():
+            q2 = q.strip()
+            mask = (
+                df["name"].astype(str).str.contains(q2, case=False, na=False)
+                | df["cas_number"].astype(str).str.contains(q2, case=False, na=False)
+            )
+            df = df[mask].reset_index(drop=True)
+
+        if df.empty:
+            st.warning("No matching reagents.")
+        else:
+            # Show top matches (mobile-friendly)
+            max_show = min(20, len(df))
+            df_show = df.head(max_show).copy()
+
+            # Build labels for selectbox
+            options = []
+            for i, r in df_show.iterrows():
+                name = str(r.get("name", ""))
+                cas = str(r.get("cas_number", ""))
+                loc = str(r.get("location", ""))
+                qty = float(r.get("quantity", 0) or 0)
+                unit = str(r.get("unit", ""))
+                rownum = int(r.get("_row", 0))
+                options.append((i, f"{name} | CAS: {cas} | {loc} | Qty: {qty:.2f} {unit} | row {rownum}"))
+
+            sel_i = st.selectbox("Select reagent", options, format_func=lambda x: x[1])
+            idx = sel_i[0]
+            r = df_show.loc[idx]
+
+            rownum = int(r.get("_row", 0))
+            name = str(r.get("name", "N/A"))
+            cas = str(r.get("cas_number", "N/A"))
+            loc = str(r.get("location", "N/A"))
+            unit = str(r.get("unit", "N/A"))
+
+            qty_before = float(r.get("quantity", 0) or 0)
+
+            st.markdown("### Enter usage")
+            with st.form("usage_form"):
+                amount_used = st.number_input(
+                    f"Amount used ({unit})",
+                    min_value=0.0,
+                    value=0.0,
+                    step=0.1
+                )
+                notes = st.text_input("Notes (optional)", "")
+
+                # Optional: prevent accidental over-deduct
+                allow_negative = st.checkbox("Allow negative stock (not recommended)", value=False)
+
+                submitted = st.form_submit_button("✅ Submit & Deduct", type="primary")
+                if submitted:
+                    if amount_used <= 0:
+                        st.error("Amount used must be > 0.")
+                        st.stop()
+
+                    if rownum <= 1:
+                        st.error("Internal error: missing sheet row number.")
+                        st.stop()
+
+                    # Lock row to avoid conflicts
+                    if not try_lock_row(rownum, st.session_state.username, "usage_deduct"):
+                        st.error("This reagent is being edited by someone else. Try again in ~1 minute.")
+                        st.stop()
+
+                    qty_after = qty_before - float(amount_used)
+
+                    if (qty_after < 0) and (not allow_negative):
+                        st.error(f"Not enough stock. Current: {qty_before:.2f} {unit}, attempted use: {amount_used:.2f} {unit}.")
+                        st.stop()
+
+                    # Write back updated quantity
+                    update_row_cells(rownum, {"quantity": str(qty_after)})
+
+                    # Audit + usage log
+                    ts = now_utc().isoformat()
+                    details = {
+                        "reagent": name,
+                        "cas_number": cas,
+                        "row": rownum,
+                        "amount_used": amount_used,
+                        "unit": unit,
+                        "qty_before": qty_before,
+                        "qty_after": qty_after,
+                        "location": loc,
+                        "notes": notes
+                    }
+                    audit("USAGE_DEDUCT", rownum, name, json.dumps(details, ensure_ascii=False))
+
+                    append_usage_log(
+                        ts_iso=ts,
+                        user=st.session_state.username,
+                        role=st.session_state.role,
+                        action="USAGE_DEDUCT",
+                        name=name,
+                        cas=cas,
+                        amount_used=amount_used,
+                        unit=unit,
+                        qty_before=qty_before,
+                        qty_after=qty_after,
+                        location=loc,
+                        notes=notes
+                    )
+
+                    st.success(f"Deducted {amount_used:.2f} {unit} from **{name}**. New qty: {qty_after:.2f} {unit}")
+                    load_inventory.clear()
+                    st.rerun()
+
 
 # ── Scan & Add ──────────────────────────────────────────────────────────────
 
@@ -921,6 +1081,7 @@ with tab_admin:
     )
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
