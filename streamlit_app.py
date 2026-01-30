@@ -695,6 +695,17 @@ with tab_add:
             st.rerun()
 
 # ── Scan & Add ──────────────────────────────────────────────────────────────
+r = requests.post(url, json=payload, timeout=30)
+
+# Print the full response body so we see the exact Google error reason
+if not r.ok:
+    st.error(f"Vision OCR failed: HTTP {r.status_code}")
+    try:
+        st.code(r.text, language="json")
+    except Exception:
+        st.write(r.text)
+    r.raise_for_status()
+
 with tab_scan:
     st.header("📷 Scan & Add (Mobile-first)")
     st.write("Step 1: Take a photo (recommended) or upload. Step 2: OCR (cloud) → auto-fill. Step 3: Add.")
@@ -886,6 +897,7 @@ with tab_admin:
     )
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
