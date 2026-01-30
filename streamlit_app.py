@@ -135,9 +135,7 @@ def vision_available() -> bool:
 
 def vision_text_detection(image_bytes: bytes) -> dict:
     """Google Vision TEXT_DETECTION using API key in secrets: [gcp_vision] api_key=..."""
-    r = requests.post(url, json=payload, timeout=25)
-r.raise_for_status()
-return r.json()
+    
     api_key = st.secrets["gcp_vision"]["api_key"]
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     url = f"https://vision.googleapis.com/v1/images:annotate?key={api_key}"
@@ -145,6 +143,9 @@ return r.json()
         "requests": [{
             "image": {"content": b64},
             "features": [{"type": "TEXT_DETECTION"}]
+            r = requests.post(url, json=payload, timeout=25)
+            r.raise_for_status()
+            return r.json()
         }]
     }
     
@@ -891,6 +892,7 @@ with tab_admin:
     )
 
 st.caption("Laboratory Reagent Inventory • January 2026")
+
 
 
 
